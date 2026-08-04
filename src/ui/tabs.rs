@@ -346,6 +346,22 @@ pub(super) fn render_tab_bar(app: &AppState, frame: &mut Frame, area: Rect) {
         frame.render_widget(Paragraph::new(text).style(style), rect);
     }
 
+    // Hackerdesk: pipe separators in the gap cells between tabs, same style as
+    // the sidebar section rules.
+    let tab_sep_style = Style::default().fg(p.text);
+    for pair in app.view.tab_hit_areas.windows(2) {
+        let (a, b) = (pair[0], pair[1]);
+        if a.width == 0 || b.width == 0 {
+            continue;
+        }
+        let x = a.x + a.width;
+        if b.x == x + 1 && x < area.x + area.width {
+            frame.buffer_mut()[(x, area.y)]
+                .set_symbol("│")
+                .set_style(tab_sep_style);
+        }
+    }
+
     if let Some(crate::app::state::DragState {
         target:
             crate::app::state::DragTarget::TabReorder {
