@@ -17,7 +17,7 @@ use crate::app::{AppState, Mode};
 use crate::detect::AgentState;
 use crate::terminal::TerminalRuntimeRegistry;
 
-const WORKSPACE_SECTION_HEADER_ROWS: u16 = 2;
+const WORKSPACE_SECTION_HEADER_ROWS: u16 = 4;
 const AGENT_PANEL_HEADER_ROWS: u16 = 3;
 
 pub(crate) struct AgentPanelEntry {
@@ -205,7 +205,7 @@ fn workspace_row_height(app: &AppState, ws: &crate::workspace::Workspace, indent
         ws.display_name()
     };
     let token_values = ws.metadata_tokens.values();
-    tokens::space_rows(
+    let content_rows = tokens::space_rows(
         &app.sidebar_spaces,
         SpaceTokenContext {
             workspace: &label,
@@ -218,7 +218,8 @@ fn workspace_row_height(app: &AppState, ws: &crate::workspace::Workspace, indent
     )
     .len()
     .max(1)
-    .min(u16::MAX as usize) as u16
+    .min((u16::MAX - 1) as usize) as u16;
+    content_rows.saturating_add(1)
 }
 
 fn workspace_row_height_in_body(
@@ -453,8 +454,7 @@ pub(crate) fn workspace_list_body_rect(area: Rect, has_scrollbar: bool) -> Rect 
     }
 
     let body_y = area.y.saturating_add(WORKSPACE_SECTION_HEADER_ROWS);
-    let footer_y = area.y + area.height.saturating_sub(1);
-    let body_height = footer_y.saturating_sub(body_y);
+    let body_height = (area.y + area.height).saturating_sub(body_y);
     let body_width = area.width.saturating_sub(u16::from(has_scrollbar));
     Rect::new(area.x, body_y, body_width, body_height)
 }
@@ -751,11 +751,7 @@ pub(super) fn render_sidebar_collapsed(app: &AppState, frame: &mut Frame, area: 
     let is_navigating = matches!(app.mode, Mode::Navigate);
 
     let p = &app.palette;
-    let sep_style = if is_navigating {
-        Style::default().fg(p.accent)
-    } else {
-        Style::default().fg(p.surface_dim)
-    };
+    let sep_style = Style::default().fg(p.text);
     let sep_x = area.x + area.width.saturating_sub(1);
     let buf = frame.buffer_mut();
     for y in area.y..area.y + area.height {
@@ -812,11 +808,7 @@ pub(super) fn render_sidebar_collapsed(app: &AppState, frame: &mut Frame, area: 
 
     if let Some(divider_y) = divider_y {
         let buf = frame.buffer_mut();
-        let divider_color = if app.agent_view_override.is_some() {
-            p.accent
-        } else {
-            p.surface_dim
-        };
+        let divider_color = p.text;
         for x in ws_area.x..ws_area.x + ws_area.width {
             buf[(x, divider_y)].set_symbol("─");
             buf[(x, divider_y)].set_style(Style::default().fg(divider_color));
@@ -890,11 +882,7 @@ pub(super) fn render_sidebar(
 ) {
     let p = &app.palette;
     let is_navigating = matches!(app.mode, Mode::Navigate);
-    let sep_style = if is_navigating {
-        Style::default().fg(p.accent)
-    } else {
-        Style::default().fg(p.surface_dim)
-    };
+    let sep_style = Style::default().fg(p.text);
 
     let sep_x = area.x + area.width.saturating_sub(1);
     let buf = frame.buffer_mut();
@@ -1107,6 +1095,31 @@ fn apply_token_style(mut style: Style, patch: crate::config::SidebarTokenStyle) 
     style
 }
 
+fn render_header_button(frame: &mut Frame, rect: Rect, label: &str, style: Style, p: &Palette) {
+    if rect.width < 3 || rect.height < 3 {
+        return;
+    }
+    let horizontal = "─".repeat(rect.width.saturating_sub(2) as usize);
+    frame.render_widget(
+        Paragraph::new(Span::styled(
+            format!("┌{horizontal}┐"),
+            Style::default().fg(p.text),
+        )),
+        Rect::new(rect.x, rect.y, rect.width, 1),
+    );
+    frame.render_widget(
+        Paragraph::new(Span::styled(label.to_string(), style)).alignment(Alignment::Center),
+        Rect::new(rect.x + 1, rect.y + 1, rect.width - 2, 1),
+    );
+    frame.render_widget(
+        Paragraph::new(Span::styled(
+            format!("└{horizontal}┘"),
+            Style::default().fg(p.text),
+        )),
+        Rect::new(rect.x, rect.y + 2, rect.width, 1),
+    );
+}
+
 fn render_workspace_list(
     app: &AppState,
     terminal_runtimes: &TerminalRuntimeRegistry,
@@ -1129,15 +1142,38 @@ fn render_workspace_list(
         _ => None,
     };
 
-    let list_bottom = area.y + area.height.saturating_sub(1);
-    if area.height > 0 {
+    let list_bottom = area.y + area.height;
+    if area.height > 1 {
         frame.render_widget(
             Paragraph::new(Line::from(vec![Span::styled(
                 " spaces",
-                Style::default().fg(p.overlay0).add_modifier(Modifier::BOLD),
+                Style::default().fg(p.text).add_modifier(Modifier::BOLD),
             )])),
-            Rect::new(area.x, area.y, area.width, 1),
+            Rect::new(area.x, area.y + 1, area.width, 1),
         );
+    }
+    if area.height >= 3 {
+        render_header_button(
+            frame,
+            app.sidebar_new_button_rect(),
+            "new",
+            Style::default().fg(p.text).add_modifier(Modifier::BOLD),
+            p,
+        );
+        let menu_style = if app.global_menu_attention_badge_visible() {
+            Style::default().fg(p.accent).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(p.text).add_modifier(Modifier::BOLD)
+        };
+        render_header_button(frame, app.global_launcher_rect(), "menu", menu_style, p);
+    }
+    if area.height >= WORKSPACE_SECTION_HEADER_ROWS {
+        let divider_y = area.y + WORKSPACE_SECTION_HEADER_ROWS - 1;
+        let buf = frame.buffer_mut();
+        for x in area.x..area.x + area.width {
+            buf[(x, divider_y)].set_symbol("─");
+            buf[(x, divider_y)].set_style(Style::default().fg(p.text));
+        }
     }
 
     let metrics = workspace_list_scroll_metrics(app, area);
@@ -1149,6 +1185,7 @@ fn render_workspace_list(
         let ws = &app.workspaces[i];
         let row_y = card.rect.y;
         let row_height = card.rect.height;
+        let content_height = row_height.saturating_sub(1);
         let selected = i == app.selected && is_navigating;
         let is_active = Some(i) == app.active;
         let is_dragged = dragged_ws_idx == Some(i);
@@ -1164,7 +1201,7 @@ fn render_workspace_list(
                 p.surface_dim
             };
             let buf = frame.buffer_mut();
-            for y in row_y..row_y + row_height {
+            for y in row_y..row_y + content_height {
                 if y >= list_bottom {
                     break;
                 }
@@ -1217,38 +1254,27 @@ fn render_workspace_list(
         );
 
         for (row_index, resolved) in rows.iter().enumerate() {
-            if row_index as u16 >= row_height || row_y + row_index as u16 >= list_bottom {
+            if row_index as u16 >= content_height || row_y + row_index as u16 >= list_bottom {
                 break;
             }
             let mut spans = Vec::new();
-            if row_index == 0 {
-                if card.indented {
-                    spans.push(Span::raw("   "));
-                } else if let Some((_, collapsed)) = parent_group.as_ref() {
+            let prefix_width = if row_index == 0 {
+                if let Some((_, collapsed)) = parent_group.as_ref() {
                     spans.push(Span::styled(
                         if *collapsed { "▸" } else { "▾" },
                         Style::default().fg(p.accent),
                     ));
                     spans.push(Span::raw(" "));
-                } else {
-                    spans.push(Span::raw(" "));
-                }
-            } else {
-                spans.push(Span::raw(if card.indented { "     " } else { "   " }));
-            }
-            let prefix_width = if row_index == 0 {
-                if card.indented {
-                    3
-                } else if parent_group.is_some() {
                     2
                 } else {
+                    spans.push(Span::raw(" "));
                     1
                 }
-            } else if card.indented {
-                5
             } else {
-                3
+                spans.push(Span::raw(" "));
+                1
             };
+            let trailing_width = if row_index == 0 { 3 } else { 0 };
             spans.extend(resolved_token_spans(
                 resolved,
                 state_icon,
@@ -1257,12 +1283,30 @@ fn render_workspace_list(
                 branch_style,
                 branch_style,
                 p,
-                card.rect.width.saturating_sub(prefix_width) as usize,
+                card.rect
+                    .width
+                    .saturating_sub(prefix_width + trailing_width) as usize,
             ));
             frame.render_widget(
                 Paragraph::new(Line::from(spans)),
                 Rect::new(card.rect.x, row_y + row_index as u16, card.rect.width, 1),
             );
+        }
+
+        if content_height > 0 && card.rect.width >= 2 {
+            frame.render_widget(
+                Paragraph::new(Span::styled(state_icon.0, state_icon.1)),
+                Rect::new(card.rect.x + card.rect.width - 2, row_y, 1, 1),
+            );
+        }
+
+        let separator_y = row_y + content_height;
+        if separator_y < list_bottom {
+            let buf = frame.buffer_mut();
+            for x in card.rect.x..card.rect.x + card.rect.width {
+                buf[(x, separator_y)].set_symbol("─");
+                buf[(x, separator_y)].set_style(Style::default().fg(p.text));
+            }
         }
     }
 
@@ -1280,31 +1324,6 @@ fn render_workspace_list(
     if let Some(track) = scrollbar_rect {
         render_scrollbar(frame, metrics, track, p.surface_dim, p.overlay0, "▕");
     }
-
-    if app.mouse_capture && list_bottom > area.y {
-        let new_rect = app.sidebar_new_button_rect();
-        frame.render_widget(
-            Paragraph::new(Span::styled(" new", Style::default().fg(p.overlay0))),
-            new_rect,
-        );
-
-        let menu_rect = app.global_launcher_rect();
-        let menu_line = if app.global_menu_attention_badge_visible() {
-            Line::from(vec![
-                Span::styled(
-                    "● ",
-                    Style::default().fg(p.accent).add_modifier(Modifier::BOLD),
-                ),
-                Span::styled("menu", Style::default().fg(p.overlay0)),
-            ])
-        } else {
-            Line::from(vec![Span::styled("menu", Style::default().fg(p.overlay0))])
-        };
-        frame.render_widget(
-            Paragraph::new(menu_line).alignment(Alignment::Right),
-            menu_rect,
-        );
-    }
 }
 
 fn render_agent_detail(
@@ -1321,7 +1340,7 @@ fn render_agent_detail(
 
     let sep_line = "─".repeat(area.width as usize);
     frame.render_widget(
-        Paragraph::new(Span::styled(&sep_line, Style::default().fg(p.surface_dim))),
+        Paragraph::new(Span::styled(&sep_line, Style::default().fg(p.text))),
         Rect::new(area.x, area.y, area.width, 1),
     );
 

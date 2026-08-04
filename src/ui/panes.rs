@@ -32,16 +32,7 @@ fn pane_border_title(label: &str, pane_width: u16, _focused: bool) -> Option<Str
 }
 
 fn stable_terminal_inner_rect(pane_inner: Rect) -> Rect {
-    if pane_inner.width <= 4 {
-        return pane_inner;
-    }
-
-    Rect::new(
-        pane_inner.x,
-        pane_inner.y,
-        pane_inner.width.saturating_sub(1),
-        pane_inner.height,
-    )
+    pane_inner
 }
 
 pub(crate) fn pane_inner_rect(area: Rect, borders: Borders) -> Rect {

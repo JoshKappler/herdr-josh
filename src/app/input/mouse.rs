@@ -1,5 +1,5 @@
 use bytes::Bytes;
-use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+use crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::{Direction, Rect};
 use tracing::warn;
 
@@ -65,6 +65,8 @@ enum MobileMouseResult {
     Consumed,
     Action(MouseAction),
 }
+
+const CLICK_POSITION_MAX_ROWS: u16 = 8;
 
 impl AppState {
     pub(crate) fn handle_pane_mouse_only(
@@ -823,6 +825,14 @@ impl AppState {
                     self.selection_autoscroll = None;
                     if was_click {
                         self.selection = None;
+                        if let Some(info) = self.pane_mouse_target(mouse.column, mouse.row).cloned()
+                        {
+                            self.position_pane_cursor_from_plain_click(
+                                terminal_runtimes,
+                                &info,
+                                mouse,
+                            );
+                        }
                     } else if was_finalized {
                         // Double-click copy already finalized this selection.
                     } else if self.copy_on_select {
@@ -1647,6 +1657,70 @@ impl AppState {
         true
     }
 
+    fn position_pane_cursor_from_plain_click(
+        &self,
+        terminal_runtimes: &TerminalRuntimeRegistry,
+        info: &PaneInfo,
+        mouse: MouseEvent,
+    ) -> bool {
+        if !mouse.modifiers.is_empty()
+            || !matches!(mouse.kind, MouseEventKind::Up(MouseButton::Left))
+        {
+            return false;
+        }
+        let Some(ws_idx) = self.active else {
+            return false;
+        };
+        let Some(rt) = self.runtime_for_pane_in_workspace(terminal_runtimes, ws_idx, info.id)
+        else {
+            return false;
+        };
+        if rt
+            .scroll_metrics()
+            .is_some_and(|metrics| metrics.offset_from_bottom > 0)
+        {
+            return false;
+        }
+        let Some(cursor) = rt.cursor_state(info.inner_rect, true) else {
+            return false;
+        };
+        if !cursor.visible || mouse.row.abs_diff(cursor.y) > CLICK_POSITION_MAX_ROWS {
+            return false;
+        }
+
+        let width = u32::from(info.inner_rect.width);
+        if width == 0 {
+            return false;
+        }
+        let cursor_offset = u32::from(cursor.y.saturating_sub(info.inner_rect.y)) * width
+            + u32::from(cursor.x.saturating_sub(info.inner_rect.x));
+        let target_offset = u32::from(mouse.row.saturating_sub(info.inner_rect.y)) * width
+            + u32::from(mouse.column.saturating_sub(info.inner_rect.x));
+        let (code, count) = if target_offset < cursor_offset {
+            (KeyCode::Left, cursor_offset - target_offset)
+        } else {
+            (KeyCode::Right, target_offset - cursor_offset)
+        };
+        if count == 0 {
+            return true;
+        }
+
+        let step =
+            rt.encode_terminal_key(crate::input::TerminalKey::new(code, KeyModifiers::empty()));
+        if step.is_empty() {
+            return false;
+        }
+        let mut bytes = Vec::with_capacity(step.len().saturating_mul(count as usize));
+        for _ in 0..count {
+            bytes.extend_from_slice(&step);
+        }
+        rt.scroll_reset();
+        if let Err(err) = rt.try_send_bytes(Bytes::from(bytes)) {
+            warn!(pane = info.id.raw(), err = %err, "failed to position cursor from mouse click");
+        }
+        true
+    }
+
     pub(super) fn forward_pane_mouse_motion(
         &self,
         terminal_runtimes: &TerminalRuntimeRegistry,
@@ -1909,6 +1983,39 @@ mod tests {
             .and_then(crate::terminal::TerminalRuntime::scroll_metrics)
             .expect("scroll metrics after wheel");
         assert_eq!(metrics.offset_from_bottom, 7);
+    }
+
+    #[tokio::test]
+    async fn plain_click_positions_cursor_when_pane_does_not_report_mouse() {
+        let mut app = app_for_mouse_test();
+        let ws = Workspace::test_new("test");
+        let pane_id = ws.tabs[0].root_pane;
+        app.state.workspaces = vec![ws];
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.mode = Mode::Terminal;
+        crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 80, 12));
+
+        let info = app.state.view.pane_infos[0].clone();
+        let (runtime, mut input_rx) =
+            crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
+                info.inner_rect.width,
+                info.inner_rect.height,
+                0,
+                b"0123456789\x1b[1;6H",
+                4,
+            );
+        app.state.insert_test_runtime(pane_id, runtime);
+
+        let row = info.inner_rect.y;
+        let col = info.inner_rect.x + 2;
+        app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), col, row));
+        assert!(app.state.selection.is_some());
+
+        app.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), col, row));
+
+        assert!(app.state.selection.is_none());
+        assert_eq!(input_rx.try_recv().unwrap().as_ref(), b"\x1b[D\x1b[D\x1b[D");
     }
 
     #[tokio::test]

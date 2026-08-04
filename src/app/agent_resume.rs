@@ -301,16 +301,7 @@ fn derived_pending_agent_resume_pane_infos(
 }
 
 fn stable_terminal_inner_rect(pane_inner: Rect) -> Rect {
-    if pane_inner.width <= 4 {
-        return pane_inner;
-    }
-
-    Rect::new(
-        pane_inner.x,
-        pane_inner.y,
-        pane_inner.width.saturating_sub(1),
-        pane_inner.height,
-    )
+    pane_inner
 }
 
 fn shell_command_from_argv(argv: &[String]) -> Option<String> {

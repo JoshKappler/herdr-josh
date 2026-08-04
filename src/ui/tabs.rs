@@ -12,6 +12,10 @@ use crate::app::AppState;
 const MIN_TAB_WIDTH: u16 = 8;
 const NEW_TAB_WIDTH: u16 = 3;
 const TAB_SCROLL_BUTTON_WIDTH: u16 = 3;
+// Local hackerdesk build: cells reserved at the right end of the tab row for
+// the window drag grip. A Hammerspoon tap owns the actual window move.
+pub(crate) const DRAG_GRIP_WIDTH: u16 = 4;
+const DRAG_GRIP_LABEL: &str = "  ⠿ ";
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct TabBarView {
@@ -391,6 +395,19 @@ pub(super) fn render_tab_bar(app: &AppState, frame: &mut Frame, area: Rect) {
                 .set_style(Style::default().fg(p.overlay0));
         }
     }
+
+    // Local hackerdesk build: window drag grip in the strip that
+    // desktop_tab_bar_and_terminal_area reserved past the row's right edge.
+    // Visual only; a Hammerspoon tap turns drags on it into window moves.
+    let frame_right = frame.area().x + frame.area().width;
+    let grip_x = area.x.saturating_add(area.width);
+    if grip_x < frame_right {
+        let grip = Rect::new(grip_x, area.y, DRAG_GRIP_WIDTH.min(frame_right - grip_x), 1);
+        frame.render_widget(
+            Paragraph::new(DRAG_GRIP_LABEL).style(Style::default().fg(p.overlay1).bg(p.panel_bg)),
+            grip,
+        );
+    }
 }
 
 #[cfg(test)]
@@ -505,3 +522,4 @@ mod tests {
         assert!(row.contains('馈'), "tab row: {row:?}");
     }
 }
+

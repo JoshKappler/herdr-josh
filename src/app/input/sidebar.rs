@@ -175,9 +175,15 @@ impl AppState {
     }
 
     pub(crate) fn sidebar_new_button_rect(&self) -> Rect {
-        let footer = self.sidebar_footer_rect();
-        let width = 5u16.min(footer.width.max(1));
-        Rect::new(footer.x, footer.y, width, footer.height)
+        let area = self.workspace_list_rect();
+        if area == Rect::default() {
+            return Rect::default();
+        }
+        let menu_width = 8u16.min(area.width);
+        let width = 7u16.min(area.width.saturating_sub(menu_width));
+        let menu_x = area.x + area.width.saturating_sub(menu_width);
+        let x = menu_x.saturating_sub(width.saturating_add(1)).max(area.x);
+        Rect::new(x, area.y, width, 3u16.min(area.height))
     }
 
     pub(crate) fn global_launcher_rect(&self) -> Rect {
@@ -185,15 +191,13 @@ impl AppState {
             return self.view.mobile_menu_hit_area;
         }
 
-        let footer = self.sidebar_footer_rect();
-        let width = if self.global_menu_attention_badge_visible() {
-            8
-        } else {
-            6
+        let area = self.workspace_list_rect();
+        if area == Rect::default() {
+            return Rect::default();
         }
-        .min(footer.width.max(1));
-        let x = footer.x + footer.width.saturating_sub(width);
-        Rect::new(x, footer.y, width, footer.height)
+        let width = 8u16.min(area.width.max(1));
+        let x = area.x + area.width.saturating_sub(width);
+        Rect::new(x, area.y, width, 3u16.min(area.height))
     }
 
     pub(crate) fn global_menu_labels(&self) -> Vec<&'static str> {
@@ -229,7 +233,8 @@ impl AppState {
         let max_x = screen.x + screen.width.saturating_sub(menu_w);
         let desired_x = launcher.x + launcher.width.saturating_sub(menu_w);
         let x = desired_x.min(max_x);
-        let y = launcher.y.saturating_sub(menu_h);
+        let max_y = screen.y + screen.height.saturating_sub(menu_h);
+        let y = launcher.y.saturating_add(launcher.height).min(max_y);
         Rect::new(x, y, menu_w, menu_h)
     }
 
