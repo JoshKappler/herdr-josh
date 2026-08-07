@@ -200,12 +200,8 @@ fn desktop_tab_bar_and_terminal_area(
 ) -> (Rect, Rect) {
     let hide_single_tab_bar = app.hide_tab_bar_when_single_tab && ws.tabs.len() == 1;
     if !hide_single_tab_bar && main_area.height > 1 {
-        let [mut tab_bar_rect, terminal_area] =
+        let [tab_bar_rect, terminal_area] =
             Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(main_area);
-        // Local hackerdesk build: the right end of the tab row is the window
-        // drag grip (drawn in render_tab_bar, dragged via a Hammerspoon tap),
-        // so tabs and their controls never lay out under it.
-        tab_bar_rect.width = tab_bar_rect.width.saturating_sub(tabs::DRAG_GRIP_WIDTH);
         (tab_bar_rect, terminal_area)
     } else {
         (Rect::default(), main_area)

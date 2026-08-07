@@ -12,10 +12,6 @@ use crate::app::AppState;
 const MIN_TAB_WIDTH: u16 = 8;
 const NEW_TAB_WIDTH: u16 = 3;
 const TAB_SCROLL_BUTTON_WIDTH: u16 = 3;
-// Local hackerdesk build: cells reserved at the right end of the tab row for
-// the window drag grip. A Hammerspoon tap owns the actual window move.
-pub(crate) const DRAG_GRIP_WIDTH: u16 = 4;
-const DRAG_GRIP_LABEL: &str = "  ⠿ ";
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct TabBarView {
@@ -346,40 +342,6 @@ pub(super) fn render_tab_bar(app: &AppState, frame: &mut Frame, area: Rect) {
         frame.render_widget(Paragraph::new(text).style(style), rect);
     }
 
-    // Hackerdesk: pipe separators in the gap cells between tabs, same style as
-    // the sidebar section rules.
-    let tab_sep_style = Style::default().fg(p.text);
-    for pair in app.view.tab_hit_areas.windows(2) {
-        let (a, b) = (pair[0], pair[1]);
-        if a.width == 0 || b.width == 0 {
-            continue;
-        }
-        let x = a.x + a.width;
-        if b.x == x + 1 && x < area.x + area.width {
-            frame.buffer_mut()[(x, area.y)]
-                .set_symbol("│")
-                .set_style(tab_sep_style);
-        }
-    }
-
-    if let Some(crate::app::state::DragState {
-        target:
-            crate::app::state::DragTarget::TabReorder {
-                ws_idx,
-                insert_idx: Some(insert_idx),
-                ..
-            },
-    }) = &app.drag
-    {
-        if *ws_idx == active_ws_idx {
-            if let Some(x) = tab_drop_indicator_x(app, ws, *insert_idx) {
-                frame.buffer_mut()[(x.min(area.x + area.width.saturating_sub(1)), area.y)]
-                    .set_symbol("│")
-                    .set_style(Style::default().fg(p.accent));
-            }
-        }
-    }
-
     if app.mouse_capture && app.view.new_tab_hit_area.width > 0 {
         frame.render_widget(
             Paragraph::new(" + ").style(Style::default().fg(p.overlay1)),
@@ -412,17 +374,57 @@ pub(super) fn render_tab_bar(app: &AppState, frame: &mut Frame, area: Rect) {
         }
     }
 
-    // Local hackerdesk build: window drag grip in the strip that
-    // desktop_tab_bar_and_terminal_area reserved past the row's right edge.
-    // Visual only; a Hammerspoon tap turns drags on it into window moves.
-    let frame_right = frame.area().x + frame.area().width;
-    let grip_x = area.x.saturating_add(area.width);
-    if grip_x < frame_right {
-        let grip = Rect::new(grip_x, area.y, DRAG_GRIP_WIDTH.min(frame_right - grip_x), 1);
-        frame.render_widget(
-            Paragraph::new(DRAG_GRIP_LABEL).style(Style::default().fg(p.overlay1).bg(p.panel_bg)),
-            grip,
-        );
+    // Hackerdesk: pipe rules on every boundary of the tab row, drawn over the
+    // row's full height in the sidebar's separator style.
+    let sep_style = Style::default().fg(p.text);
+    let area_right = area.x + area.width;
+    let mut sep_xs: Vec<u16> = Vec::new();
+    if let Some(first) = first_visible_idx.and_then(|idx| app.view.tab_hit_areas.get(idx)) {
+        sep_xs.extend(first.x.checked_sub(1));
+    }
+    for pair in app.view.tab_hit_areas.windows(2) {
+        let (a, b) = (pair[0], pair[1]);
+        if a.width == 0 || b.width == 0 {
+            continue;
+        }
+        let x = a.x + a.width;
+        if b.x == x + 1 {
+            sep_xs.push(x);
+        }
+    }
+    if let Some(last) = last_visible_idx.and_then(|idx| app.view.tab_hit_areas.get(idx)) {
+        sep_xs.push(last.x + last.width);
+    }
+    if app.view.new_tab_hit_area.width > 0 {
+        sep_xs.push(app.view.new_tab_hit_area.x);
+    }
+    let buf = frame.buffer_mut();
+    for x in sep_xs {
+        if x < area.x || x >= area_right {
+            continue;
+        }
+        for y in area.y..area.y + area.height {
+            buf[(x, y)].set_symbol("│");
+            buf[(x, y)].set_style(sep_style);
+        }
+    }
+
+    if let Some(crate::app::state::DragState {
+        target:
+            crate::app::state::DragTarget::TabReorder {
+                ws_idx,
+                insert_idx: Some(insert_idx),
+                ..
+            },
+    }) = &app.drag
+    {
+        if *ws_idx == active_ws_idx {
+            if let Some(x) = tab_drop_indicator_x(app, ws, *insert_idx) {
+                frame.buffer_mut()[(x.min(area.x + area.width.saturating_sub(1)), area.y)]
+                    .set_symbol("│")
+                    .set_style(Style::default().fg(p.accent));
+            }
+        }
     }
 }
 
@@ -538,4 +540,3 @@ mod tests {
         assert!(row.contains('馈'), "tab row: {row:?}");
     }
 }
-
