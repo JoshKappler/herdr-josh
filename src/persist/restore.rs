@@ -716,6 +716,8 @@ fn restore_tab(
                 #[cfg(test)]
                 runtimes: HashMap::new(),
                 zoomed: snap.zoomed,
+                metadata_tokens: crate::metadata_tokens::MetadataTokens::default(),
+                metadata_token_sequences: HashMap::new(),
                 events: runtime_context.events.clone(),
                 render_notify: runtime_context.render_notify.clone(),
                 render_dirty: runtime_context.render_dirty.clone(),

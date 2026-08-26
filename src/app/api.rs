@@ -781,6 +781,16 @@ impl App {
         });
     }
 
+    pub(crate) fn emit_tab_token_updated(&mut self, ws_idx: usize, tab_idx: usize) {
+        // Bypasses plugin hooks for the same reason as the workspace variant.
+        if let Some(tab) = self.tab_info(ws_idx, tab_idx) {
+            self.event_hub.push(crate::api::schema::EventEnvelope {
+                event: crate::api::schema::EventKind::TabMetadataUpdated,
+                data: crate::api::schema::EventData::TabMetadataUpdated { tab },
+            });
+        }
+    }
+
     pub(crate) fn sync_focus_events(&mut self) {
         self.sync_focus_events_with_outer_event(None);
     }
@@ -996,6 +1006,9 @@ impl App {
             Method::TabFocus(target) => return self.handle_tab_focus(request.id, target),
             Method::TabRename(params) => return self.handle_tab_rename(request.id, params),
             Method::TabMove(params) => return self.handle_tab_move(request.id, params),
+            Method::TabReportMetadata(params) => {
+                return self.handle_tab_report_metadata(request.id, params);
+            }
             Method::TabClose(target) => return self.handle_tab_close(request.id, target),
             Method::AgentList(_) => return self.handle_agent_list(request.id),
             Method::AgentGet(target) => return self.handle_agent_get(request.id, target),

@@ -291,6 +291,16 @@ fn tab_command() -> Command {
                 .arg(required("tab_id", "TAB_ID"))
                 .arg(required("label", "LABEL").num_args(1..)),
         )
+        .subcommand(
+            Command::new("report-metadata")
+                .about("Report display-only tab metadata")
+                .arg(required("tab_id", "TAB_ID"))
+                .arg(option("source", "ID").required(true))
+                .arg(repeatable_option("token", "NAME=VALUE"))
+                .arg(repeatable_option("clear-token", "NAME"))
+                .arg(option("seq", "N"))
+                .arg(option("ttl-ms", "N")),
+        )
         .subcommand(id_command("close", "tab_id", "Close a tab"))
 }
 
@@ -1121,6 +1131,7 @@ mod tests {
     fn spec_marks_runtime_required_options_as_required() {
         for (path, options) in [
             (&["workspace", "report-metadata"][..], &["source"][..]),
+            (&["tab", "report-metadata"][..], &["source"][..]),
             (&["pane", "neighbor"][..], &["direction"][..]),
             (&["pane", "focus"][..], &["direction"][..]),
             (&["pane", "resize"][..], &["direction"][..]),

@@ -46,6 +46,8 @@ pub struct Tab {
     #[cfg(test)]
     pub runtimes: HashMap<PaneId, TerminalRuntime>,
     pub zoomed: bool,
+    pub(crate) metadata_tokens: crate::metadata_tokens::MetadataTokens,
+    pub(crate) metadata_token_sequences: HashMap<String, u64>,
     pub events: mpsc::Sender<AppEvent>,
     pub(crate) render_notify: Arc<Notify>,
     pub(crate) render_dirty: Arc<AtomicBool>,
@@ -177,6 +179,8 @@ impl Tab {
                 #[cfg(test)]
                 runtimes: HashMap::new(),
                 zoomed: false,
+                metadata_tokens: crate::metadata_tokens::MetadataTokens::default(),
+                metadata_token_sequences: HashMap::new(),
                 events,
                 render_notify,
                 render_dirty,
@@ -453,6 +457,8 @@ impl Tab {
             #[cfg(test)]
             runtimes: HashMap::new(),
             zoomed: false,
+            metadata_tokens: crate::metadata_tokens::MetadataTokens::default(),
+            metadata_token_sequences: HashMap::new(),
             events,
             render_notify,
             render_dirty,

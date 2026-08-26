@@ -388,6 +388,26 @@ impl App {
         for ws_idx in workspaces {
             self.emit_workspace_token_updated(ws_idx);
         }
+        let changed_tabs: Vec<(usize, usize)> = self
+            .state
+            .workspaces
+            .iter_mut()
+            .enumerate()
+            .flat_map(|(ws_idx, workspace)| {
+                workspace
+                    .tabs
+                    .iter_mut()
+                    .enumerate()
+                    .filter_map(move |(tab_idx, tab)| {
+                        tab.metadata_tokens
+                            .expire_at(now)
+                            .then_some((ws_idx, tab_idx))
+                    })
+            })
+            .collect();
+        for (ws_idx, tab_idx) in changed_tabs {
+            self.emit_tab_token_updated(ws_idx, tab_idx);
+        }
         self.sync_agent_metadata_deadline();
     }
 

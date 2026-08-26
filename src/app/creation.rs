@@ -317,6 +317,7 @@ impl App {
             focused: self.state.active == Some(ws_idx) && ws.active_tab == tab_idx,
             pane_count: tab.panes.len(),
             agent_status: pane_agent_status(agg_state, seen),
+            tokens: tab.metadata_tokens.values(),
         })
     }
 

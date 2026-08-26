@@ -46,6 +46,8 @@ pub enum Subscription {
     TabRenamed {},
     #[serde(rename = "tab.moved")]
     TabMoved {},
+    #[serde(rename = "tab.metadata_updated")]
+    TabMetadataUpdated {},
     #[serde(rename = "pane.created")]
     PaneCreated {},
     #[serde(rename = "pane.closed")]
@@ -204,6 +206,7 @@ pub enum EventKind {
     TabClosed,
     TabRenamed,
     TabMoved,
+    TabMetadataUpdated,
     TabFocused,
     PaneCreated,
     PaneClosed,
@@ -234,6 +237,7 @@ impl EventKind {
             EventKind::TabClosed => "tab.closed",
             EventKind::TabRenamed => "tab.renamed",
             EventKind::TabMoved => "tab.moved",
+            EventKind::TabMetadataUpdated => "tab.metadata_updated",
             EventKind::TabFocused => "tab.focused",
             EventKind::PaneCreated => "pane.created",
             EventKind::PaneClosed => "pane.closed",
@@ -265,6 +269,7 @@ pub const KNOWN_EVENT_KINDS: &[EventKind] = &[
     EventKind::TabClosed,
     EventKind::TabRenamed,
     EventKind::TabMoved,
+    EventKind::TabMetadataUpdated,
     EventKind::TabFocused,
     EventKind::PaneCreated,
     EventKind::PaneClosed,
@@ -347,6 +352,7 @@ mod known_event_name_tests {
         assert!(!names.contains(&"pane.output_changed"));
         assert!(!names.contains(&"layout.updated"));
         assert!(!names.contains(&"workspace.metadata_updated"));
+        assert!(!names.contains(&"tab.metadata_updated"));
         assert!(!names.contains(&"pane.updated"));
         assert!(names.contains(&"pane.moved"));
     }
@@ -473,6 +479,9 @@ pub enum EventData {
         workspace_id: String,
         insert_index: usize,
         tabs: Vec<TabInfo>,
+    },
+    TabMetadataUpdated {
+        tab: TabInfo,
     },
     TabFocused {
         tab_id: String,

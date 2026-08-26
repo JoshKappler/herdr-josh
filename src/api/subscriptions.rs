@@ -172,6 +172,10 @@ impl ActiveSubscription {
                 event_kind: crate::api::schema::EventKind::TabMoved,
                 last_sequence: 0,
             })),
+            Subscription::TabMetadataUpdated {} => Ok(Self::Event(ActiveEventSubscription {
+                event_kind: crate::api::schema::EventKind::TabMetadataUpdated,
+                last_sequence: 0,
+            })),
             Subscription::PaneCreated {} => Ok(Self::Event(ActiveEventSubscription {
                 event_kind: crate::api::schema::EventKind::PaneCreated,
                 last_sequence: 0,
@@ -688,6 +692,28 @@ mod tests {
             subscription,
             ActiveSubscription::Event(ActiveEventSubscription {
                 event_kind: EventKind::WorkspaceMetadataUpdated,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn tab_metadata_subscription_uses_dedicated_event_kind() {
+        let event_hub = EventHub::default();
+        let (api_tx, _api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let subscription = ActiveSubscription::new(
+            Subscription::TabMetadataUpdated {},
+            "test",
+            0,
+            &api_tx,
+            &event_hub,
+        )
+        .expect("tab metadata subscription");
+
+        assert!(matches!(
+            subscription,
+            ActiveSubscription::Event(ActiveEventSubscription {
+                event_kind: EventKind::TabMetadataUpdated,
                 ..
             })
         ));

@@ -120,6 +120,55 @@ fn workspace_report_metadata_sends_token_patch() {
 }
 
 #[test]
+fn tab_report_metadata_sends_token_patch() {
+    let base = unique_test_dir();
+    fs::create_dir_all(&base).unwrap();
+    let socket_path = base.join("herdr.sock");
+    let listener = UnixListener::bind(&socket_path).unwrap();
+
+    let server = thread::spawn(move || {
+        let (mut stream, line) = accept_fake_cli_operation(&listener);
+        stream
+            .write_all(br#"{"id":"cli:request","result":{"type":"ok"}}"#)
+            .unwrap();
+        stream.write_all(b"\n").unwrap();
+        stream.flush().unwrap();
+        line
+    });
+
+    let run = run_cli(
+        &socket_path,
+        &[
+            "tab",
+            "report-metadata",
+            "w_1:2",
+            "--source",
+            "user:jj",
+            "--token",
+            "jj_status=2 changes",
+            "--clear-token",
+            "old",
+            "--ttl-ms",
+            "5000",
+        ],
+    );
+    assert!(
+        run.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    let request: serde_json::Value = serde_json::from_str(&server.join().unwrap()).unwrap();
+    assert_eq!(request["method"], "tab.report_metadata");
+    assert_eq!(request["params"]["tab_id"], "w_1:2");
+    assert_eq!(request["params"]["tokens"]["jj_status"], "2 changes");
+    assert!(request["params"]["tokens"]["old"].is_null());
+    assert_eq!(request["params"]["ttl_ms"], 5000);
+
+    cleanup_test_base(&base);
+}
+
+#[test]
 fn pane_report_metadata_sends_presentation_request() {
     let base = unique_test_dir();
     fs::create_dir_all(&base).unwrap();

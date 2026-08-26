@@ -2,10 +2,11 @@ use std::path::PathBuf;
 
 use crate::api::schema::{
     EventData, EventEnvelope, EventKind, ResponseResult, TabCreateParams, TabListParams,
-    TabMoveParams, TabRenameParams, TabTarget,
+    TabMoveParams, TabRenameParams, TabReportMetadataParams, TabTarget,
 };
 use crate::app::{App, Mode};
 
+use super::super::api_helpers::{normalize_metadata_source, normalize_metadata_ttl};
 use super::responses::{encode_error, encode_success};
 
 impl App {
@@ -222,6 +223,81 @@ impl App {
         encode_success(id, ResponseResult::TabList { tabs })
     }
 
+    pub(super) fn handle_tab_report_metadata(
+        &mut self,
+        id: String,
+        params: TabReportMetadataParams,
+    ) -> String {
+        let Some((ws_idx, tab_idx)) = self.parse_tab_id(&params.tab_id) else {
+            return tab_not_found(id, &params.tab_id);
+        };
+        let source = match normalize_metadata_source(params.source) {
+            Ok(source) => source,
+            Err(message) => return encode_error(id, "invalid_metadata_source", message),
+        };
+        let ttl = match normalize_metadata_ttl(params.ttl_ms) {
+            Ok(ttl) => ttl,
+            Err(message) => return encode_error(id, "invalid_metadata_ttl", message),
+        };
+        let tokens = match super::super::api_helpers::normalize_metadata_tokens(params.tokens) {
+            Ok(tokens) => tokens,
+            Err(message) => return encode_error(id, "invalid_metadata_token", message),
+        };
+        let Some(tab) = self
+            .state
+            .workspaces
+            .get_mut(ws_idx)
+            .and_then(|ws| ws.tabs.get_mut(tab_idx))
+        else {
+            return tab_not_found(id, &params.tab_id);
+        };
+        if !crate::metadata_tokens::sequence_is_fresh(
+            &tab.metadata_token_sequences,
+            &source,
+            params.seq,
+        ) {
+            return encode_success(id, ResponseResult::Ok {});
+        }
+        if tab.metadata_tokens.key_count_after_patch(&tokens)
+            > super::super::api_helpers::MAX_METADATA_TOKEN_KEYS_PER_RESOURCE
+        {
+            return encode_error(
+                id,
+                "metadata_token_limit",
+                format!(
+                    "tab metadata may contain at most {} tokens",
+                    super::super::api_helpers::MAX_METADATA_TOKEN_KEYS_PER_RESOURCE
+                ),
+            );
+        }
+        match crate::metadata_tokens::accept_sequence(
+            &mut tab.metadata_token_sequences,
+            &source,
+            params.seq,
+        ) {
+            Ok(true) => {}
+            Ok(false) => return encode_success(id, ResponseResult::Ok {}),
+            Err(()) => {
+                return encode_error(
+                    id,
+                    "metadata_sequence_source_limit",
+                    format!(
+                        "tab metadata may track at most {} sequenced sources",
+                        crate::metadata_tokens::MAX_SEQUENCE_SOURCES
+                    ),
+                );
+            }
+        }
+        let changed = tab
+            .metadata_tokens
+            .patch(tokens, ttl, std::time::Instant::now());
+        if changed {
+            self.sync_agent_metadata_deadline();
+            self.emit_tab_token_updated(ws_idx, tab_idx);
+        }
+        encode_success(id, ResponseResult::Ok {})
+    }
+
     pub(super) fn handle_tab_close(&mut self, id: String, target: TabTarget) -> String {
         let Some((ws_idx, tab_idx)) = self.parse_tab_id(&target.tab_id) else {
             return tab_not_found(id, &target.tab_id);
@@ -347,6 +423,93 @@ mod tests {
                     && tabs[2].tab_id == moved_id
             )
         }));
+    }
+
+    #[test]
+    fn tab_metadata_tokens_patch_clear_and_emit_snapshot() {
+        let event_hub = crate::api::EventHub::default();
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(&Config::default(), true, None, api_rx, event_hub.clone());
+        app.state.workspaces = vec![Workspace::test_new("one")];
+        let tab_id = app.public_tab_id(0, 0).unwrap();
+
+        for (tokens, expected) in [
+            (
+                std::collections::HashMap::from([
+                    ("summary".into(), Some("reviewing auth".into())),
+                    ("jj_status".into(), Some("2 changes".into())),
+                ]),
+                std::collections::HashMap::from([
+                    ("summary".into(), "reviewing auth".into()),
+                    ("jj_status".into(), "2 changes".into()),
+                ]),
+            ),
+            (
+                std::collections::HashMap::from([
+                    ("summary".into(), Some("done".into())),
+                    ("jj_status".into(), None),
+                ]),
+                std::collections::HashMap::from([("summary".into(), "done".into())]),
+            ),
+        ] {
+            let response = app.handle_api_request(crate::api::schema::Request {
+                id: "req".into(),
+                method: crate::api::schema::Method::TabReportMetadata(TabReportMetadataParams {
+                    tab_id: tab_id.clone(),
+                    source: "user:test".into(),
+                    tokens,
+                    seq: None,
+                    ttl_ms: None,
+                }),
+            });
+            let success: SuccessResponse = serde_json::from_str(&response).unwrap();
+            assert_eq!(success.result, ResponseResult::Ok {});
+            assert_eq!(app.tab_info(0, 0).unwrap().tokens, expected);
+        }
+
+        assert!(event_hub.events_after(0).iter().any(|(_, event)| matches!(
+            &event.data,
+            EventData::TabMetadataUpdated { tab }
+                if tab.tokens.get("summary").map(String::as_str) == Some("done")
+                    && !tab.tokens.contains_key("jj_status")
+        )));
+    }
+
+    #[test]
+    fn tab_token_ttl_expires_through_runtime_and_emits_update() {
+        let event_hub = crate::api::EventHub::default();
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(&Config::default(), true, None, api_rx, event_hub.clone());
+        app.state.workspaces = vec![Workspace::test_new("one")];
+        let tab_id = app.public_tab_id(0, 0).unwrap();
+        let response = app.handle_tab_report_metadata(
+            "req".into(),
+            TabReportMetadataParams {
+                tab_id,
+                source: "user:test".into(),
+                tokens: std::collections::HashMap::from([(
+                    "summary".into(),
+                    Some("temporary".into()),
+                )]),
+                seq: None,
+                ttl_ms: Some(1),
+            },
+        );
+        let _: SuccessResponse = serde_json::from_str(&response).unwrap();
+        // agent_metadata_deadline only sees tab TTLs once the actions.rs
+        // deadline scan chains tabs; read the tab expiry directly here.
+        let deadline = app.state.workspaces[0].tabs[0]
+            .metadata_tokens
+            .next_expiry()
+            .expect("token deadline");
+
+        app.expire_metadata_at(deadline, deadline);
+
+        assert!(app.tab_info(0, 0).unwrap().tokens.is_empty());
+        assert!(event_hub.events_after(0).iter().any(|(_, event)| matches!(
+            &event.data,
+            EventData::TabMetadataUpdated { tab } if tab.tokens.is_empty()
+        )));
     }
 
     #[test]

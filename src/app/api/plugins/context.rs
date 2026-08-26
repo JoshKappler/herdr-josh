@@ -90,7 +90,9 @@ impl App {
                     context.workspace_cwd = Some(worktree.path.clone());
                     context
                 }),
-            EventData::TabCreated { tab } => self.plugin_context_for_tab_info(tab, correlation_id),
+            EventData::TabCreated { tab } | EventData::TabMetadataUpdated { tab } => {
+                self.plugin_context_for_tab_info(tab, correlation_id)
+            }
             EventData::TabClosed {
                 tab_id,
                 workspace_id,

@@ -998,6 +998,12 @@ impl AppState {
                     .iter()
                     .filter_map(|workspace| workspace.metadata_tokens.next_expiry()),
             )
+            .chain(
+                self.workspaces
+                    .iter()
+                    .flat_map(|workspace| workspace.tabs.iter())
+                    .filter_map(|tab| tab.metadata_tokens.next_expiry()),
+            )
             .min()
     }
 
@@ -2879,6 +2885,10 @@ impl AppState {
             self.next_agent_state_change_seq += 1;
             if let Some(terminal) = self.terminals.get_mut(&terminal_id) {
                 terminal.last_agent_state_change_seq = Some(self.next_agent_state_change_seq);
+                terminal.last_agent_state_change_at = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .ok()
+                    .map(|d| d.as_millis() as u64);
             }
         }
         let seen = self.apply_pane_state_change(ws_idx, pane_id, &change)?;
