@@ -292,14 +292,26 @@ pub(crate) fn tab_dashboards(
 
 /// Grouped worktree members and manually named spaces keep an identity row;
 /// an ordinary space is nothing but its tabs.
-fn workspace_name_row_visible(ws: &crate::workspace::Workspace) -> bool {
-    ws.custom_name.is_some() || ws.worktree_space().is_some()
+fn workspace_name_row_visible(
+    app: &AppState,
+    ws_idx: usize,
+    ws: &crate::workspace::Workspace,
+    indented: bool,
+) -> bool {
+    ws.custom_name.is_some()
+        || indented
+        || workspace_parent_group_state(app, ws_idx).is_some()
 }
 
-fn workspace_row_height(app: &AppState, ws: &crate::workspace::Workspace, _indented: bool) -> u16 {
+fn workspace_row_height(
+    app: &AppState,
+    ws_idx: usize,
+    ws: &crate::workspace::Workspace,
+    indented: bool,
+) -> u16 {
     let dashes = tab_dashboards(app, ws);
     let tab_rows: usize = dashes.iter().map(|d| d.rows.len()).sum();
-    let content = usize::from(workspace_name_row_visible(ws))
+    let content = usize::from(workspace_name_row_visible(app, ws_idx, ws, indented))
         + tab_rows
         + dashes.len().saturating_sub(1);
     (content.max(1).min((u16::MAX - 1) as usize) as u16).saturating_add(1)
@@ -307,11 +319,12 @@ fn workspace_row_height(app: &AppState, ws: &crate::workspace::Workspace, _inden
 
 fn workspace_row_height_in_body(
     app: &AppState,
+    ws_idx: usize,
     workspace: &crate::workspace::Workspace,
     indented: bool,
     body_height: u16,
 ) -> u16 {
-    workspace_row_height(app, workspace, indented).min(body_height)
+    workspace_row_height(app, ws_idx, workspace, indented).min(body_height)
 }
 
 fn workspace_entry_gap(
@@ -558,7 +571,7 @@ fn workspace_list_visible_count(app: &AppState, area: Rect, scroll: usize) -> us
                     continue;
                 };
                 (
-                    workspace_row_height_in_body(app, ws, *indented, body.height),
+                    workspace_row_height_in_body(app, *ws_idx, ws, *indented, body.height),
                     workspace_entry_gap(app, &entries, entry_idx, *indented),
                 )
             }
@@ -584,7 +597,7 @@ fn workspace_list_bottom_start(app: &AppState, area: Rect) -> usize {
             continue;
         };
         let gap = workspace_entry_gap(app, &entries, entry_idx, *indented);
-        let needed = workspace_row_height_in_body(app, workspace, *indented, body.height)
+        let needed = workspace_row_height_in_body(app, *ws_idx, workspace, *indented, body.height)
             .saturating_add(gap);
         if used_rows.saturating_add(needed) > body.height {
             break;
@@ -776,7 +789,7 @@ pub(crate) fn compute_workspace_list_areas(
                 let Some(ws) = app.workspaces.get(*ws_idx) else {
                     continue;
                 };
-                let row_height = workspace_row_height_in_body(app, ws, *indented, body.height);
+                let row_height = workspace_row_height_in_body(app, *ws_idx, ws, *indented, body.height);
                 let gap = workspace_entry_gap(app, &entries, entry_idx, *indented);
                 if row_y.saturating_add(row_height) > body_bottom {
                     break;
@@ -789,7 +802,8 @@ pub(crate) fn compute_workspace_list_areas(
                 let content_bottom = row_y
                     .saturating_add(row_height.saturating_sub(1))
                     .min(body_bottom);
-                let mut tab_y = row_y + u16::from(workspace_name_row_visible(ws));
+                let mut tab_y =
+                    row_y + u16::from(workspace_name_row_visible(app, *ws_idx, ws, *indented));
                 for (i, dash) in tab_dashboards(app, ws).iter().enumerate() {
                     if i > 0 {
                         tab_y = tab_y.saturating_add(1);
@@ -1301,16 +1315,15 @@ fn render_workspace_list(
                 ..
             }) if *target == i && *source_ws_idx != i
         );
-        let highlighted = selected || is_active || is_dragged || is_drop_target;
-        let (agg_state, agg_seen) = ws.aggregate_state(&app.terminals);
+        // the active-tab block gets its own backdrop below; the whole card
+        // lights up only for keyboard selection and drags (Josh 2026-08-26)
+        let highlighted = selected || is_dragged || is_drop_target;
 
         if highlighted {
             let bg = if selected {
                 p.surface0
-            } else if is_dragged || is_drop_target {
-                p.surface1
             } else {
-                p.surface_dim
+                p.surface1
             };
             let buf = frame.buffer_mut();
             for y in row_y..row_y + content_height {
@@ -1338,16 +1351,10 @@ fn render_workspace_list(
         let parent_group = (!card.indented)
             .then(|| workspace_parent_group_state(app, i))
             .flatten();
-        let (display_state, display_seen) = parent_group
-            .as_ref()
-            .filter(|(_, collapsed)| *collapsed)
-            .map(|(key, _)| space_aggregate_state(app, key))
-            .unwrap_or((agg_state, agg_seen));
-        let state_icon = state_dot(display_state, display_seen, p);
 
         let content_bottom = (row_y + content_height).min(list_bottom);
         let mut y = row_y;
-        if workspace_name_row_visible(ws) && y < content_bottom {
+        if workspace_name_row_visible(app, i, ws, card.indented) && y < content_bottom {
             let mut spans = Vec::new();
             let prefix_width = if let Some((_, collapsed)) = parent_group.as_ref() {
                 spans.push(Span::styled(
@@ -1361,14 +1368,14 @@ fn render_workspace_list(
                 1
             };
             let style = if ws.custom_name.is_some() {
-                Style::default().fg(p.blue).add_modifier(Modifier::BOLD)
+                Style::default().fg(p.teal).add_modifier(Modifier::BOLD)
             } else {
                 name_style
             };
             spans.push(Span::styled(
                 truncate_end(
                     &display_label,
-                    card.rect.width.saturating_sub(prefix_width + 3) as usize,
+                    card.rect.width.saturating_sub(prefix_width + 1) as usize,
                 ),
                 style,
             ));
@@ -1376,12 +1383,6 @@ fn render_workspace_list(
                 Paragraph::new(Line::from(spans)),
                 Rect::new(card.rect.x, y, card.rect.width, 1),
             );
-            if card.rect.width >= 2 {
-                frame.render_widget(
-                    Paragraph::new(Span::styled(state_icon.0, state_icon.1)),
-                    Rect::new(card.rect.x + card.rect.width - 2, y, 1, 1),
-                );
-            }
             y = y.saturating_add(1);
         }
 
@@ -1408,6 +1409,16 @@ fn render_workspace_list(
                 y = y.saturating_add(1);
             }
             let tab_is_active = is_active && dash.tab_idx == ws.active_tab;
+            if tab_is_active && !highlighted {
+                let block_bottom =
+                    (y + dash.rows.len() as u16).min(content_bottom);
+                let buf = frame.buffer_mut();
+                for by in y..block_bottom {
+                    for x in card.rect.x..card.rect.x + card.rect.width {
+                        buf[(x, by)].set_style(Style::default().bg(p.surface_dim));
+                    }
+                }
+            }
             for row in &dash.rows {
                 if y >= content_bottom {
                     break 'tabs;
@@ -1429,11 +1440,7 @@ fn render_workspace_list(
                                 .as_ref()
                                 .map(|e| display_width(e) + 1)
                                 .unwrap_or(0);
-                        let title_style = if tab_is_active || selected {
-                            Style::default().fg(p.text).add_modifier(Modifier::BOLD)
-                        } else {
-                            Style::default().fg(p.text)
-                        };
+                        let title_style = Style::default().fg(p.text);
                         let avail = card
                             .rect
                             .width
@@ -1628,25 +1635,26 @@ mod tests {
             .unwrap();
         let buffer = terminal.backend().buffer();
 
-        // manual space names render blue; only the active card gets a backdrop
+        // manual space names render teal with no backdrop of their own; the
+        // active TAB block carries the highlight (Josh 2026-08-26)
         let active = buffer[(find_symbol_x(buffer, first_row, 25, "o"), first_row)].style();
-        assert_eq!(active.fg, Some(app.palette.blue));
+        assert_eq!(active.fg, Some(app.palette.teal));
         assert!(active.add_modifier.contains(Modifier::BOLD));
-        assert_eq!(active.bg, Some(app.palette.surface_dim));
+        assert_eq!(active.bg, Some(ratatui::style::Color::Reset));
 
         let inactive = buffer[(find_symbol_x(buffer, second_row, 25, "t"), second_row)].style();
-        assert_eq!(inactive.fg, Some(app.palette.blue));
+        assert_eq!(inactive.fg, Some(app.palette.teal));
         assert_eq!(inactive.bg, Some(ratatui::style::Color::Reset));
 
         let active_tab_row = first_row + 1;
         let tab = buffer[(find_symbol_x(buffer, active_tab_row, 25, "s"), active_tab_row)].style();
         assert_eq!(tab.fg, Some(app.palette.text));
-        assert!(tab.add_modifier.contains(Modifier::BOLD));
+        assert_eq!(tab.bg, Some(app.palette.surface_dim));
 
         let idle_tab_row = second_row + 1;
         let idle = buffer[(find_symbol_x(buffer, idle_tab_row, 25, "s"), idle_tab_row)].style();
         assert_eq!(idle.fg, Some(app.palette.text));
-        assert!(!idle.add_modifier.contains(Modifier::BOLD));
+        assert_eq!(idle.bg, Some(ratatui::style::Color::Reset));
     }
 
     #[test]
