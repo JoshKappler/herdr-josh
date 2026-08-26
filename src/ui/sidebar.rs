@@ -1300,13 +1300,17 @@ fn render_workspace_list(
             );
         }
 
-        // Double rule between spaces (Josh 2026-08-26): the ┄ token rows
-        // inside a tile separate its tabs, so the space boundary is louder.
-        let separator_y = row_y + content_height;
-        if separator_y < list_bottom {
-            let buf = frame.buffer_mut();
+        // Double rule between spaces (Josh 2026-08-26): the in-card separator
+        // row plus the first gap row, two parallel lines one cell apart. A
+        // "═" glyph reads as one thick line at this font size. The ┄ token
+        // rows inside a tile stay the quieter tab mark.
+        let buf = frame.buffer_mut();
+        for separator_y in [row_y + content_height, row_y + row_height] {
+            if separator_y >= list_bottom {
+                break;
+            }
             for x in card.rect.x..card.rect.x + card.rect.width {
-                buf[(x, separator_y)].set_symbol("═");
+                buf[(x, separator_y)].set_symbol("─");
                 buf[(x, separator_y)].set_style(Style::default().fg(p.text));
             }
         }
@@ -1436,9 +1440,9 @@ fn render_agent_detail(
                 Rect::new(body.x, row_y + row_index as u16, body.width, 1),
             );
         }
-        // Space-group rule (Josh 2026-08-26): under grouped sort, the gap row
-        // between entries of different workspaces carries the same double
-        // rule the spaces list uses, so the boxes read grouped by space.
+        // Space-group rule (Josh 2026-08-26): under grouped sort, the gap
+        // rows between entries of different workspaces carry the same double
+        // parallel lines the spaces list uses, so boxes read grouped by space.
         let gap = agent_entry_gap(app, index, details.len());
         if gap > 0
             && app.agent_panel_sort == AgentPanelSort::Spaces
@@ -1446,11 +1450,14 @@ fn render_agent_detail(
                 .get(index + 1)
                 .is_some_and(|next| next.ws_idx != detail.ws_idx)
         {
-            let sep_y = row_y.saturating_add(height);
-            if sep_y < body_bottom {
-                let buf = frame.buffer_mut();
+            let buf = frame.buffer_mut();
+            for off in 0..gap.min(2) {
+                let sep_y = row_y.saturating_add(height).saturating_add(off);
+                if sep_y >= body_bottom {
+                    break;
+                }
                 for x in body.x..body.x + body.width {
-                    buf[(x, sep_y)].set_symbol("═");
+                    buf[(x, sep_y)].set_symbol("─");
                     buf[(x, sep_y)].set_style(Style::default().fg(p.text));
                 }
             }
