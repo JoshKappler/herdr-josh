@@ -320,7 +320,14 @@ impl AppState {
         if self.sidebar_footer_rect() == Rect::default() {
             return None;
         }
-        self.view.sidebar_tab_rows.iter().find_map(|tab_row| {
+        let computed;
+        let rows = if self.view.sidebar_tab_rows.is_empty() {
+            computed = crate::ui::compute_workspace_list_areas(self, self.view.sidebar_rect).1;
+            &computed
+        } else {
+            &self.view.sidebar_tab_rows
+        };
+        rows.iter().find_map(|tab_row| {
             (row >= tab_row.rect.y && row < tab_row.rect.y + tab_row.rect.height)
                 .then_some((tab_row.ws_idx, tab_row.tab_idx))
         })

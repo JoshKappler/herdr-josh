@@ -259,6 +259,14 @@ pub(crate) fn tab_dashboards(
                     ws.tab_display_name(tab_idx)
                         .filter(|label| !label.chars().all(|c| c.is_ascii_digit()))
                 })
+                .or_else(|| {
+                    tab.panes.values().find_map(|pane| {
+                        app.terminals
+                            .get(&pane.attached_terminal_id)
+                            .and_then(|t| t.terminal_title_stripped())
+                            .filter(|t| !t.is_empty())
+                    })
+                })
                 .unwrap_or_else(|| "shell".to_string());
             let mut rows = vec![TabDashRow::Title {
                 text: title,

@@ -812,6 +812,8 @@ pub struct UiConfig {
     pub show_agent_labels_on_pane_borders: bool,
     /// Hide the tab row when the workspace has one tab. Default: false.
     pub hide_tab_bar_when_single_tab: bool,
+    /// Hide the tab row always; the sidebar is the tab switcher. Default: false.
+    pub hide_tab_bar: bool,
     /// Agent sidebar ordering. Saved values are "spaces" or "priority". Default: "spaces".
     pub agent_panel_sort: AgentPanelSortConfig,
     /// Spaces-list share of the sidebar height (0.1-0.9); unset keeps the dragged split.
@@ -1012,6 +1014,7 @@ impl Default for UiConfig {
             pane_gaps: true,
             show_agent_labels_on_pane_borders: false,
             hide_tab_bar_when_single_tab: false,
+            hide_tab_bar: false,
             agent_panel_sort: AgentPanelSortConfig::Spaces,
             sidebar_section_split: None,
             sidebar: SidebarConfig::default(),
