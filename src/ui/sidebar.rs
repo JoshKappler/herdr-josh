@@ -1300,18 +1300,14 @@ fn render_workspace_list(
             );
         }
 
-        // Double rule between spaces (Josh 2026-08-26): the line glyph plus
-        // an underline in ONE row puts the two strokes about half a cell
-        // apart. "═" merges into one thick line at this font size, and lines
-        // on adjacent rows sit a full cell apart, which read too far.
+        // Rule between spaces (Josh 2026-08-26): one heavy solid line; the
+        // earlier double-rule forms were hard to read at this font size.
         let separator_y = row_y + content_height;
         if separator_y < list_bottom {
             let buf = frame.buffer_mut();
             for x in card.rect.x..card.rect.x + card.rect.width {
-                buf[(x, separator_y)].set_symbol("─");
-                buf[(x, separator_y)].set_style(
-                    Style::default().fg(p.text).add_modifier(Modifier::UNDERLINED),
-                );
+                buf[(x, separator_y)].set_symbol("━");
+                buf[(x, separator_y)].set_style(Style::default().fg(p.text));
             }
         }
     }
@@ -1441,8 +1437,8 @@ fn render_agent_detail(
             );
         }
         // Space-group rule (Josh 2026-08-26): under grouped sort, the gap row
-        // between entries of different workspaces carries the same one-row
-        // double rule (line glyph plus underline) the spaces list uses.
+        // between entries of different workspaces carries the same heavy
+        // solid rule the spaces list uses.
         let gap = agent_entry_gap(app, index, details.len());
         if gap > 0
             && app.agent_panel_sort == AgentPanelSort::Spaces
@@ -1454,10 +1450,8 @@ fn render_agent_detail(
             if sep_y < body_bottom {
                 let buf = frame.buffer_mut();
                 for x in body.x..body.x + body.width {
-                    buf[(x, sep_y)].set_symbol("─");
-                    buf[(x, sep_y)].set_style(
-                        Style::default().fg(p.text).add_modifier(Modifier::UNDERLINED),
-                    );
+                    buf[(x, sep_y)].set_symbol("━");
+                    buf[(x, sep_y)].set_style(Style::default().fg(p.text));
                 }
             }
         }
