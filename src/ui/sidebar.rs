@@ -201,7 +201,6 @@ pub(crate) enum TabDashRow {
         seen: bool,
         since_ms: Option<u64>,
     },
-    Detail(String),
     Counts(String),
     Lane(String),
 }
@@ -274,9 +273,6 @@ pub(crate) fn tab_dashboards(
                 seen,
                 since_ms,
             }];
-            if let Some(s) = toks.get("s1").filter(|s| !s.is_empty()) {
-                rows.push(TabDashRow::Detail(s.clone()));
-            }
             if let Some(s) = toks.get("hdr").filter(|s| !s.is_empty()) {
                 rows.push(TabDashRow::Counts(s.clone()));
             }
@@ -292,13 +288,17 @@ pub(crate) fn tab_dashboards(
 
 /// Grouped worktree members and manually named spaces keep an identity row;
 /// an ordinary space is nothing but its tabs.
+fn workspace_has_manual_name(ws: &crate::workspace::Workspace) -> bool {
+    ws.custom_name.as_deref().is_some_and(|name| !name.is_empty())
+}
+
 fn workspace_name_row_visible(
     app: &AppState,
     ws_idx: usize,
     ws: &crate::workspace::Workspace,
     indented: bool,
 ) -> bool {
-    ws.custom_name.is_some()
+    workspace_has_manual_name(ws)
         || indented
         || workspace_parent_group_state(app, ws_idx).is_some()
 }
@@ -1367,7 +1367,7 @@ fn render_workspace_list(
                 spans.push(Span::raw(" "));
                 1
             };
-            let style = if ws.custom_name.is_some() {
+            let style = if workspace_has_manual_name(ws) {
                 Style::default().fg(p.teal).add_modifier(Modifier::BOLD)
             } else {
                 name_style
@@ -1467,21 +1467,6 @@ fn render_workspace_list(
                         frame.render_widget(
                             Paragraph::new(Line::from(status_spans)),
                             Rect::new(status_x, y, status_width as u16, 1),
-                        );
-                    }
-                    TabDashRow::Detail(text) => {
-                        frame.render_widget(
-                            Paragraph::new(Line::from(vec![
-                                Span::raw(" "),
-                                Span::styled(
-                                    truncate_end(
-                                        text,
-                                        card.rect.width.saturating_sub(2) as usize,
-                                    ),
-                                    Style::default().fg(p.subtext0),
-                                ),
-                            ])),
-                            Rect::new(card.rect.x, y, card.rect.width, 1),
                         );
                     }
                     TabDashRow::Counts(text) => {
