@@ -1300,11 +1300,13 @@ fn render_workspace_list(
             );
         }
 
+        // Double rule between spaces (Josh 2026-08-26): the ┄ token rows
+        // inside a tile separate its tabs, so the space boundary is louder.
         let separator_y = row_y + content_height;
         if separator_y < list_bottom {
             let buf = frame.buffer_mut();
             for x in card.rect.x..card.rect.x + card.rect.width {
-                buf[(x, separator_y)].set_symbol("─");
+                buf[(x, separator_y)].set_symbol("═");
                 buf[(x, separator_y)].set_style(Style::default().fg(p.text));
             }
         }
@@ -1434,9 +1436,28 @@ fn render_agent_detail(
                 Rect::new(body.x, row_y + row_index as u16, body.width, 1),
             );
         }
+        // Space-group rule (Josh 2026-08-26): under grouped sort, the gap row
+        // between entries of different workspaces carries the same double
+        // rule the spaces list uses, so the boxes read grouped by space.
+        let gap = agent_entry_gap(app, index, details.len());
+        if gap > 0
+            && app.agent_panel_sort == AgentPanelSort::Spaces
+            && details
+                .get(index + 1)
+                .is_some_and(|next| next.ws_idx != detail.ws_idx)
+        {
+            let sep_y = row_y.saturating_add(height);
+            if sep_y < body_bottom {
+                let buf = frame.buffer_mut();
+                for x in body.x..body.x + body.width {
+                    buf[(x, sep_y)].set_symbol("═");
+                    buf[(x, sep_y)].set_style(Style::default().fg(p.text));
+                }
+            }
+        }
         row_y = row_y
             .saturating_add(height)
-            .saturating_add(agent_entry_gap(app, index, details.len()))
+            .saturating_add(gap)
             .min(body_bottom);
     }
 
