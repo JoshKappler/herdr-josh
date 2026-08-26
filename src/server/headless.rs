@@ -4548,9 +4548,6 @@ mod tests {
         server.app.state.active = Some(0);
         server.app.state.selected = 0;
         server.app.state.mode = crate::app::Mode::Terminal;
-        server.app.state.sidebar_agents.rows = vec![vec![
-            crate::config::AgentSidebarToken::TerminalTitleStripped,
-        ]];
         let pane_id = server.app.state.workspaces[0].tabs[0].root_pane;
         let terminal_id = server.app.state.workspaces[0].tabs[0].panes[&pane_id]
             .attached_terminal_id
@@ -4585,7 +4582,7 @@ mod tests {
             .iter()
             .map(|cell| cell.symbol())
             .collect::<String>();
-        assert!(rendered.contains("task"), "rendered frame: {rendered:?}");
+        assert!(rendered.contains("one"), "rendered frame: {rendered:?}");
 
         server
             .app

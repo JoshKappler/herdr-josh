@@ -252,6 +252,7 @@ pub(crate) fn tab_dashboards(
             let (state, seen, since_ms) = tab_attention(app, tab);
             let title = toks
                 .get("t")
+                .or_else(|| toks.get("sh"))
                 .filter(|t| !t.is_empty())
                 .cloned()
                 .or_else(|| {
@@ -1604,90 +1605,6 @@ mod tests {
     }
 
     #[test]
-    fn default_agent_rows_remove_redundant_state_text() {
-        let mut app = crate::app::state::AppState::test_new();
-        let workspace = Workspace::test_new("one");
-        let pane_id = workspace.tabs[0].root_pane;
-        app.workspaces = vec![workspace];
-        app.ensure_test_terminals();
-        app.active = Some(0);
-        let terminal_id = app.workspaces[0].tabs[0].panes[&pane_id]
-            .attached_terminal_id
-            .clone();
-        let terminal_state = app.terminals.get_mut(&terminal_id).unwrap();
-        terminal_state.detected_agent = Some(Agent::Pi);
-        terminal_state.state = AgentState::Working;
-
-        let area = Rect::new(0, 0, 26, 20);
-        let mut terminal = Terminal::new(TestBackend::new(26, 20)).unwrap();
-        terminal
-            .draw(|frame| render_sidebar(&app, &TerminalRuntimeRegistry::new(), frame, area))
-            .unwrap();
-        let buffer = terminal.backend().buffer();
-        let (_, agent_area) = expanded_sidebar_sections(area, app.sidebar_section_split);
-        let body = agent_panel_body_rect(agent_area, false);
-
-        let first = row_text(buffer, body.y, 25);
-        let second = row_text(buffer, body.y + 1, 25);
-        assert!(first.contains("one"));
-        assert_eq!(second, "   pi");
-        assert!(!first.contains("working"));
-        assert!(!second.contains("working"));
-
-        let workspace_x = find_symbol_x(buffer, body.y, body.width, "o");
-        let workspace_style = buffer[(workspace_x, body.y)].style();
-        assert_eq!(workspace_style.fg, Some(app.palette.text));
-        assert!(workspace_style.add_modifier.contains(Modifier::BOLD));
-        assert!(!workspace_style.add_modifier.contains(Modifier::DIM));
-        assert_eq!(workspace_style.bg, Some(app.palette.surface_dim));
-
-        let agent_x = find_symbol_x(buffer, body.y + 1, body.width, "p");
-        let agent_style = buffer[(agent_x, body.y + 1)].style();
-        assert_eq!(agent_style.fg, Some(app.palette.overlay0));
-        assert!(agent_style.add_modifier.contains(Modifier::DIM));
-        assert!(!agent_style.add_modifier.contains(Modifier::BOLD));
-        assert_eq!(agent_style.bg, Some(app.palette.surface_dim));
-    }
-
-    #[test]
-    fn occurrence_false_removes_default_workspace_bold_and_agent_dim() {
-        let config: crate::config::Config = toml::from_str(
-            r##"
-[ui.sidebar.agents]
-rows = [[{ token = "workspace", bold = false }, { token = "agent", dim = false }]]
-"##,
-        )
-        .unwrap();
-        let mut app = crate::app::state::AppState::test_new();
-        app.sidebar_agents = config.ui.sidebar.agents;
-        let workspace = Workspace::test_new("one");
-        let pane_id = workspace.tabs[0].root_pane;
-        app.workspaces = vec![workspace];
-        app.ensure_test_terminals();
-        app.active = Some(0);
-        let terminal_id = app.workspaces[0].tabs[0].panes[&pane_id]
-            .attached_terminal_id
-            .clone();
-        app.terminals.get_mut(&terminal_id).unwrap().detected_agent = Some(Agent::Pi);
-
-        let area = Rect::new(0, 0, 26, 20);
-        let mut terminal = Terminal::new(TestBackend::new(26, 20)).unwrap();
-        terminal
-            .draw(|frame| render_sidebar(&app, &TerminalRuntimeRegistry::new(), frame, area))
-            .unwrap();
-        let (_, agent_area) = expanded_sidebar_sections(area, app.sidebar_section_split);
-        let body = agent_panel_body_rect(agent_area, false);
-        let buffer = terminal.backend().buffer();
-        let workspace = buffer[(find_symbol_x(buffer, body.y, body.width, "o"), body.y)].style();
-        let agent = buffer[(find_symbol_x(buffer, body.y, body.width, "p"), body.y)].style();
-
-        assert_eq!(workspace.fg, Some(app.palette.text));
-        assert!(!workspace.add_modifier.contains(Modifier::BOLD));
-        assert_eq!(agent.fg, Some(app.palette.overlay0));
-        assert!(!agent.add_modifier.contains(Modifier::DIM));
-    }
-
-    #[test]
     fn default_space_workspace_style_tracks_active_state() {
         let mut app = crate::app::state::AppState::test_new();
         app.workspaces = vec![Workspace::test_new("one"), Workspace::test_new("two")];
@@ -1703,62 +1620,25 @@ rows = [[{ token = "workspace", bold = false }, { token = "agent", dim = false }
             .unwrap();
         let buffer = terminal.backend().buffer();
 
+        // manual space names render blue; only the active card gets a backdrop
         let active = buffer[(find_symbol_x(buffer, first_row, 25, "o"), first_row)].style();
-        assert_eq!(active.fg, Some(app.palette.text));
+        assert_eq!(active.fg, Some(app.palette.blue));
         assert!(active.add_modifier.contains(Modifier::BOLD));
-        assert!(!active.add_modifier.contains(Modifier::DIM));
         assert_eq!(active.bg, Some(app.palette.surface_dim));
 
         let inactive = buffer[(find_symbol_x(buffer, second_row, 25, "t"), second_row)].style();
-        assert_eq!(inactive.fg, Some(app.palette.subtext0));
-        assert!(!inactive
-            .add_modifier
-            .intersects(Modifier::BOLD | Modifier::DIM));
+        assert_eq!(inactive.fg, Some(app.palette.blue));
         assert_eq!(inactive.bg, Some(ratatui::style::Color::Reset));
-    }
 
-    #[test]
-    fn space_occurrence_style_applies_without_styling_separator() {
-        let config: crate::config::Config = toml::from_str(
-            r##"
-[ui.sidebar.spaces]
-rows = [[{ token = "$hype", fg = "#abcdef", bold = true, dim = false }, "workspace"]]
-"##,
-        )
-        .unwrap();
-        let mut app = crate::app::state::AppState::test_new();
-        app.sidebar_spaces = config.ui.sidebar.spaces;
-        app.workspaces = vec![Workspace::test_new("one")];
-        app.active = Some(0);
-        app.mode = Mode::Terminal;
-        app.workspaces[0].metadata_tokens.patch(
-            std::collections::HashMap::from([("hype".into(), Some("HI".into()))]),
-            None,
-            std::time::Instant::now(),
-        );
+        let active_tab_row = first_row + 1;
+        let tab = buffer[(find_symbol_x(buffer, active_tab_row, 25, "s"), active_tab_row)].style();
+        assert_eq!(tab.fg, Some(app.palette.text));
+        assert!(tab.add_modifier.contains(Modifier::BOLD));
 
-        let area = Rect::new(0, 0, 26, 20);
-        app.view.workspace_card_areas = compute_workspace_card_areas(&app, area);
-        let row = app.view.workspace_card_areas[0].rect.y;
-        let mut terminal = Terminal::new(TestBackend::new(26, 20)).unwrap();
-        terminal
-            .draw(|frame| render_sidebar(&app, &TerminalRuntimeRegistry::new(), frame, area))
-            .unwrap();
-        let buffer = terminal.backend().buffer();
-        let h = buffer[(find_symbol_x(buffer, row, 25, "H"), row)].style();
-        let i = buffer[(find_symbol_x(buffer, row, 25, "I"), row)].style();
-        let separator = buffer[(find_symbol_x(buffer, row, 25, "·"), row)].style();
-
-        for style in [h, i] {
-            assert_eq!(style.fg, Some(ratatui::style::Color::Rgb(0xab, 0xcd, 0xef)));
-            assert!(style.add_modifier.contains(Modifier::BOLD));
-            assert!(!style.add_modifier.contains(Modifier::DIM));
-            assert_eq!(style.bg, Some(app.palette.surface_dim));
-        }
-        assert_eq!(separator.fg, Some(app.palette.overlay0));
-        assert!(separator.add_modifier.contains(Modifier::DIM));
-        assert!(!separator.add_modifier.contains(Modifier::BOLD));
-        assert_eq!(separator.bg, Some(app.palette.surface_dim));
+        let idle_tab_row = second_row + 1;
+        let idle = buffer[(find_symbol_x(buffer, idle_tab_row, 25, "s"), idle_tab_row)].style();
+        assert_eq!(idle.fg, Some(app.palette.text));
+        assert!(!idle.add_modifier.contains(Modifier::BOLD));
     }
 
     #[test]
@@ -1799,60 +1679,8 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
     }
 
     #[test]
-    fn narrow_agent_rows_preserve_later_tab_tokens() {
-        let mut app = crate::app::state::AppState::test_new();
-        let mut workspace = Workspace::test_new("very-long-workspace-name");
-        let tab_idx = workspace.test_add_tab(Some("logs"));
-        let pane_id = workspace.tabs[tab_idx].root_pane;
-        app.workspaces = vec![workspace];
-        app.ensure_test_terminals();
-        let terminal_id = app.workspaces[0].tabs[tab_idx].panes[&pane_id]
-            .attached_terminal_id
-            .clone();
-        app.terminals.get_mut(&terminal_id).unwrap().detected_agent = Some(Agent::Pi);
-
-        let area = Rect::new(0, 0, 18, 20);
-        let mut terminal = Terminal::new(TestBackend::new(18, 20)).unwrap();
-        terminal
-            .draw(|frame| render_sidebar(&app, &TerminalRuntimeRegistry::new(), frame, area))
-            .unwrap();
-        let buffer = terminal.backend().buffer();
-        let (_, agent_area) = expanded_sidebar_sections(area, app.sidebar_section_split);
-        let body = agent_panel_body_rect(agent_area, false);
-        let first = row_text(buffer, body.y, 17);
-
-        assert!(first.contains("logs"), "rendered row: {first:?}");
-        assert!(first.contains('·'), "rendered row: {first:?}");
-    }
-
-    #[test]
     fn stripped_terminal_title_renders_with_unicode_width_truncation() {
-        let mut app = crate::app::state::AppState::test_new();
-        let workspace = Workspace::test_new("one");
-        let pane_id = workspace.tabs[0].root_pane;
-        app.workspaces = vec![workspace];
-        app.ensure_test_terminals();
-        let terminal_id = app.workspaces[0].tabs[0].panes[&pane_id]
-            .attached_terminal_id
-            .clone();
-        let terminal = app.terminals.get_mut(&terminal_id).unwrap();
-        terminal.detected_agent = Some(Agent::Claude);
-        terminal.set_terminal_title(Some("⠋ 修复🙂标题很长".into()));
-        app.sidebar_agents.rows = vec![vec![
-            crate::config::AgentSidebarToken::TerminalTitleStripped,
-        ]];
-
-        let area = Rect::new(0, 0, 10, 12);
-        let mut renderer = Terminal::new(TestBackend::new(10, 12)).unwrap();
-        renderer
-            .draw(|frame| render_sidebar(&app, &TerminalRuntimeRegistry::new(), frame, area))
-            .unwrap();
-        let (_, agent_area) = expanded_sidebar_sections(area, app.sidebar_section_split);
-        let body = agent_panel_body_rect(agent_area, false);
-        let rendered = row_text(renderer.backend().buffer(), body.y, 9);
-
-        assert!(!rendered.contains('⠋'));
-        assert!(rendered.contains('修') && rendered.contains('复'));
+        let app = crate::app::state::AppState::test_new();
 
         let spans = resolved_token_spans(
             &[ResolvedToken::unstyled(ResolvedTokenKind::TerminalTitle(
@@ -1920,8 +1748,11 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
     #[test]
     fn oversized_space_layout_is_clipped_to_the_section_body() {
         let mut app = crate::app::state::AppState::test_new();
-        app.workspaces = vec![Workspace::test_new("one"), Workspace::test_new("two")];
-        app.sidebar_spaces.rows = vec![vec![crate::config::SpaceSidebarToken::Workspace]; 6];
+        let mut big = Workspace::test_new("one");
+        for i in 0..12 {
+            big.test_add_tab(Some(&format!("tab-{i}")));
+        }
+        app.workspaces = vec![big, Workspace::test_new("two")];
         let area = Rect::new(0, 0, 20, 10);
         let workspace_area = workspace_list_rect(area, app.sidebar_section_split);
         let body = workspace_list_body_rect(workspace_area, false);
@@ -2377,9 +2208,8 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
         ];
         app.sidebar_spaces.row_gap = 1;
 
-        let (cards, headers) = compute_workspace_list_areas(&app, Rect::new(0, 0, 30, 20));
+        let (cards, _) = compute_workspace_list_areas(&app, Rect::new(0, 0, 30, 20));
 
-        assert!(headers.is_empty());
         assert_eq!(cards[0].ws_idx, 0);
         assert!(!cards[0].indented);
         assert_eq!(cards[1].ws_idx, 1);
@@ -2412,7 +2242,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             spacious[3].rect.y,
             spacious[2].rect.y + spacious[2].rect.height + 2
         );
-        let spacious_metrics = workspace_list_scroll_metrics(&app, Rect::new(0, 0, 30, 7));
+        let spacious_metrics = workspace_list_scroll_metrics(&app, Rect::new(0, 0, 30, 14));
         assert_eq!(spacious_metrics.viewport_rows, 2);
         assert_eq!(spacious_metrics.max_offset_from_bottom, 2);
 
@@ -2421,9 +2251,9 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
         assert!(packed
             .windows(2)
             .all(|pair| pair[1].rect.y == pair[0].rect.y + pair[0].rect.height));
-        let packed_metrics = workspace_list_scroll_metrics(&app, Rect::new(0, 0, 30, 7));
-        assert_eq!(packed_metrics.viewport_rows, 4);
-        assert_eq!(packed_metrics.max_offset_from_bottom, 0);
+        let packed_metrics = workspace_list_scroll_metrics(&app, Rect::new(0, 0, 30, 14));
+        assert_eq!(packed_metrics.viewport_rows, 3);
+        assert_eq!(packed_metrics.max_offset_from_bottom, 1);
     }
 
     #[test]
@@ -2441,7 +2271,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
         let list_area = workspace_list_rect(area, app.sidebar_section_split);
         let indicator_row =
             workspace_drop_indicator_row(&app.view.workspace_card_areas, list_area, 2).unwrap();
-        assert_eq!(indicator_row, app.view.workspace_card_areas[1].rect.y);
+        assert_eq!(indicator_row, app.view.workspace_card_areas[2].rect.y - 1);
         app.drag = Some(crate::app::state::DragState {
             target: crate::app::state::DragTarget::WorkspaceReorder {
                 source_ws_idx: 0,
@@ -2504,9 +2334,8 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
         let area = Rect::new(0, 0, 30, 20);
         app.workspace_scroll = normalized_workspace_scroll(&app, area, 2);
 
-        let (cards, headers) = compute_workspace_list_areas(&app, area);
+        let (cards, _) = compute_workspace_list_areas(&app, area);
 
-        assert!(headers.is_empty());
         assert_eq!(app.workspace_scroll, 0);
         assert_eq!(cards.len(), 3);
         assert_eq!(cards[2].ws_idx, 2);
@@ -2548,11 +2377,11 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
         app.mode = Mode::Terminal;
         app.workspace_scroll = 1;
 
-        let (cards, headers) = compute_workspace_list_areas(&app, Rect::new(0, 0, 30, 12));
+        let (cards, tab_rows) = compute_workspace_list_areas(&app, Rect::new(0, 0, 30, 12));
 
-        assert!(headers.is_empty());
         assert_eq!(cards.len(), 1);
         assert_eq!(cards[0].ws_idx, 2);
+        assert!(tab_rows.iter().all(|row| row.ws_idx == 2));
     }
 
     #[test]

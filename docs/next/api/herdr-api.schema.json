@@ -393,6 +393,22 @@
             },
             {
               "properties": {
+                "tab": {
+                  "$ref": "#/schemas/event/$defs/TabInfo"
+                },
+                "type": {
+                  "const": "tab_metadata_updated",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "tab"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
                 "tab_id": {
                   "type": "string"
                 },
@@ -710,6 +726,7 @@
             "tab_closed",
             "tab_renamed",
             "tab_moved",
+            "tab_metadata_updated",
             "tab_focused",
             "pane_created",
             "pane_closed",
@@ -1019,6 +1036,16 @@
             },
             "tab_id": {
               "type": "string"
+            },
+            "tokens": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "maxProperties": 32,
+              "propertyNames": {
+                "pattern": "^[A-Za-z0-9_-]{1,32}$"
+              },
+              "type": "object"
             },
             "workspace_id": {
               "type": "string"
@@ -3784,6 +3811,18 @@
             {
               "properties": {
                 "type": {
+                  "const": "tab.metadata_updated",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "type": {
                   "const": "pane.created",
                   "type": "string"
                 }
@@ -4030,6 +4069,52 @@
           "required": [
             "tab_id",
             "label"
+          ],
+          "type": "object"
+        },
+        "TabReportMetadataParams": {
+          "properties": {
+            "seq": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "source": {
+              "type": "string"
+            },
+            "tab_id": {
+              "type": "string"
+            },
+            "tokens": {
+              "additionalProperties": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "maxProperties": 16,
+              "propertyNames": {
+                "pattern": "^[A-Za-z0-9_-]{1,32}$"
+              },
+              "type": "object"
+            },
+            "ttl_ms": {
+              "format": "uint64",
+              "maximum": 86400000,
+              "minimum": 1,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "tab_id",
+            "source",
+            "tokens"
           ],
           "type": "object"
         },
@@ -4755,6 +4840,22 @@
             },
             "params": {
               "$ref": "#/schemas/request/$defs/TabMoveParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "tab.report_metadata",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/TabReportMetadataParams"
             }
           },
           "required": [
@@ -6523,6 +6624,22 @@
             },
             {
               "properties": {
+                "tab": {
+                  "$ref": "#/schemas/success_response/$defs/TabInfo"
+                },
+                "type": {
+                  "const": "tab_metadata_updated",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "tab"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
                 "tab_id": {
                   "type": "string"
                 },
@@ -6855,6 +6972,7 @@
             "tab_closed",
             "tab_renamed",
             "tab_moved",
+            "tab_metadata_updated",
             "tab_focused",
             "pane_created",
             "pane_closed",
@@ -9653,6 +9771,16 @@
             },
             "tab_id": {
               "type": "string"
+            },
+            "tokens": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "maxProperties": 32,
+              "propertyNames": {
+                "pattern": "^[A-Za-z0-9_-]{1,32}$"
+              },
+              "type": "object"
             },
             "workspace_id": {
               "type": "string"

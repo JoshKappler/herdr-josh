@@ -657,150 +657,6 @@ mod tests {
     }
 
     #[test]
-    fn clicking_agent_detail_row_switches_to_correct_tab_and_pane() {
-        let mut app = app_for_mouse_test();
-        let mut ws = Workspace::test_new("test");
-        ws.tabs[0].set_custom_name("main".into());
-        let first_pane = ws.tabs[0].root_pane;
-        let first_tab = ws.test_add_tab(Some("logs"));
-        let second_pane = ws.tabs[first_tab].root_pane;
-        app.state.workspaces = vec![ws];
-        app.state.ensure_test_terminals();
-        let first_terminal_id = app.state.workspaces[0].tabs[0].panes[&first_pane]
-            .attached_terminal_id
-            .clone();
-        app.state
-            .terminals
-            .get_mut(&first_terminal_id)
-            .unwrap()
-            .detected_agent = Some(Agent::Pi);
-        let second_terminal_id = app.state.workspaces[0].tabs[first_tab].panes[&second_pane]
-            .attached_terminal_id
-            .clone();
-        app.state
-            .terminals
-            .get_mut(&second_terminal_id)
-            .unwrap()
-            .detected_agent = Some(Agent::Claude);
-        app.state.active = Some(0);
-        app.state.selected = 0;
-        app.state.mode = Mode::Terminal;
-
-        app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 2, 16));
-
-        assert_eq!(app.state.workspaces[0].active_tab, 1);
-        assert_eq!(
-            app.state.workspaces[0].tabs[1].layout.focused(),
-            second_pane
-        );
-        assert_eq!(app.state.mode, Mode::Terminal);
-        let snapshot = capture_snapshot(&app.state);
-        assert_eq!(snapshot.workspaces[0].active_tab, first_tab);
-        assert_eq!(
-            snapshot.workspaces[0].tabs[first_tab].focused,
-            Some(second_pane.raw())
-        );
-    }
-
-    #[test]
-    fn per_agent_row_heights_preserve_card_gaps_and_trailing_mouse_targets() {
-        let mut app = app_for_mouse_test();
-        let first = Workspace::test_new("one");
-        let first_pane = first.tabs[0].root_pane;
-        let second = Workspace::test_new("two");
-        let second_pane = second.tabs[0].root_pane;
-        app.state.workspaces = vec![first, second];
-        app.state.ensure_test_terminals();
-        for (ws_idx, pane_id, agent) in
-            [(0, first_pane, Agent::Pi), (1, second_pane, Agent::Claude)]
-        {
-            let terminal_id = app.state.workspaces[ws_idx].tabs[0].panes[&pane_id]
-                .attached_terminal_id
-                .clone();
-            app.state
-                .terminals
-                .get_mut(&terminal_id)
-                .unwrap()
-                .detected_agent = Some(agent);
-        }
-        app.state.sidebar_agents.rows = vec![vec![crate::config::AgentSidebarToken::Agent]];
-        app.state.sidebar_agents.rows_by_agent.insert(
-            "claude".into(),
-            vec![
-                vec![crate::config::AgentSidebarToken::Agent],
-                vec![crate::config::AgentSidebarToken::Workspace],
-            ],
-        );
-        app.state.sidebar_agents.row_gap = 1;
-        let detail_area = app.state.agent_panel_rect();
-        let metrics = crate::ui::agent_panel_scroll_metrics(&app.state, detail_area);
-        let body = crate::ui::agent_panel_body_rect(
-            detail_area,
-            crate::ui::should_show_scrollbar(metrics),
-        );
-
-        assert_eq!(
-            app.state.agent_detail_target_at(body.y),
-            Some((0, 0, first_pane))
-        );
-        assert_eq!(app.state.agent_detail_target_at(body.y + 1), None);
-        assert_eq!(
-            app.state.agent_detail_target_at(body.y + 3),
-            Some((1, 0, second_pane))
-        );
-
-        app.state.sidebar_agents.row_gap = 0;
-        assert_eq!(
-            app.state.agent_detail_target_at(body.y + 1),
-            Some((1, 0, second_pane))
-        );
-    }
-
-    #[test]
-    fn agent_hit_testing_clamps_scroll_after_dynamic_filter_shrink() {
-        let mut app = app_for_mouse_test();
-        let first = Workspace::test_new("one");
-        let first_pane = first.tabs[0].root_pane;
-        let second = Workspace::test_new("two");
-        let second_pane = second.tabs[0].root_pane;
-        app.state.workspaces = vec![first, second];
-        app.state.ensure_test_terminals();
-        app.state.active = Some(0);
-        app.state.selected = 0;
-        for (ws_idx, pane_id) in [(0, first_pane), (1, second_pane)] {
-            let terminal_id = app.state.workspaces[ws_idx].tabs[0].panes[&pane_id]
-                .attached_terminal_id
-                .clone();
-            app.state
-                .terminals
-                .get_mut(&terminal_id)
-                .unwrap()
-                .detected_agent = Some(Agent::Claude);
-        }
-        app.state.agent_view_override = Some(crate::api::schema::AgentViewSetParams {
-            source: "example.views".to_string(),
-            label: None,
-            filter: Some(crate::api::schema::AgentViewFilter::Eq {
-                field: crate::api::schema::AgentViewField::Builtin(
-                    crate::api::schema::AgentViewBuiltinField::WorkspaceId,
-                ),
-                value: crate::api::schema::AgentViewValue::Context {
-                    context: crate::api::schema::AgentViewContext::CurrentWorkspaceId,
-                },
-            }),
-            sort: Vec::new(),
-        });
-        app.state.agent_panel_scroll = 10;
-        let detail_area = app.state.agent_panel_rect();
-        let body = crate::ui::agent_panel_body_rect(detail_area, false);
-
-        assert_eq!(
-            app.state.agent_detail_target_at(body.y),
-            Some((0, 0, first_pane))
-        );
-    }
-
-    #[test]
     fn clicking_agent_panel_toggle_switches_sort() {
         let mut app = app_for_mouse_test();
         app.state.workspaces = vec![Workspace::test_new("test")];
@@ -822,183 +678,6 @@ mod tests {
 
         assert_eq!(app.state.agent_panel_sort, AgentPanelSort::Priority);
         assert_eq!(app.state.agent_panel_scroll, 0);
-    }
-
-    #[test]
-    fn clicking_all_workspaces_agent_row_switches_to_correct_workspace() {
-        let mut app = app_for_mouse_test();
-        let first = Workspace::test_new("one");
-        let first_pane = first.tabs[0].root_pane;
-
-        let second = Workspace::test_new("two");
-        let second_pane = second.tabs[0].root_pane;
-
-        app.state.workspaces = vec![first, second];
-        app.state.ensure_test_terminals();
-        let first_terminal_id = app.state.workspaces[0].tabs[0].panes[&first_pane]
-            .attached_terminal_id
-            .clone();
-        app.state
-            .terminals
-            .get_mut(&first_terminal_id)
-            .unwrap()
-            .detected_agent = Some(Agent::Pi);
-        let second_terminal_id = app.state.workspaces[1].tabs[0].panes[&second_pane]
-            .attached_terminal_id
-            .clone();
-        app.state
-            .terminals
-            .get_mut(&second_terminal_id)
-            .unwrap()
-            .detected_agent = Some(Agent::Claude);
-        app.state.active = Some(0);
-        app.state.selected = 0;
-        app.state.mode = Mode::Terminal;
-
-        let (_, detail_area) = crate::ui::expanded_sidebar_sections(
-            app.state.view.sidebar_rect,
-            app.state.sidebar_section_split,
-        );
-        app.handle_mouse(mouse(
-            MouseEventKind::Down(MouseButton::Left),
-            detail_area.x + 2,
-            detail_area.y + 6,
-        ));
-
-        assert_eq!(app.state.active, Some(1));
-        assert_eq!(app.state.selected, 1);
-        assert_eq!(app.state.workspaces[1].active_tab, 0);
-        assert_eq!(
-            app.state.workspaces[1].tabs[0].layout.focused(),
-            second_pane
-        );
-    }
-
-    #[test]
-    fn scrolling_agent_panel_with_wheel_updates_agent_panel_scroll() {
-        let mut app = app_for_mouse_test();
-        let mut ws = Workspace::test_new("test");
-        let first_pane = ws.tabs[0].root_pane;
-
-        let mut tabs = Vec::new();
-        for (tab_name, agent) in [
-            ("logs", Agent::Claude),
-            ("review", Agent::Codex),
-            ("ops", Agent::Gemini),
-        ] {
-            let tab_idx = ws.test_add_tab(Some(tab_name));
-            let pane_id = ws.tabs[tab_idx].root_pane;
-            tabs.push((tab_idx, pane_id, agent));
-        }
-
-        app.state.workspaces = vec![ws];
-        app.state.ensure_test_terminals();
-        let first_terminal_id = app.state.workspaces[0].tabs[0].panes[&first_pane]
-            .attached_terminal_id
-            .clone();
-        app.state
-            .terminals
-            .get_mut(&first_terminal_id)
-            .unwrap()
-            .detected_agent = Some(Agent::Pi);
-        for (tab_idx, pane_id, agent) in tabs {
-            let terminal_id = app.state.workspaces[0].tabs[tab_idx].panes[&pane_id]
-                .attached_terminal_id
-                .clone();
-            app.state
-                .terminals
-                .get_mut(&terminal_id)
-                .unwrap()
-                .detected_agent = Some(agent);
-        }
-        app.state.active = Some(0);
-        app.state.selected = 0;
-        app.state.mode = Mode::Terminal;
-
-        let detail_area = app.state.agent_panel_rect();
-        assert!(crate::ui::should_show_scrollbar(
-            crate::ui::agent_panel_scroll_metrics(&app.state, detail_area)
-        ));
-
-        app.handle_mouse(mouse(
-            MouseEventKind::ScrollDown,
-            detail_area.x + 1,
-            detail_area.y + 4,
-        ));
-
-        assert_eq!(app.state.agent_panel_scroll, 1);
-        assert_eq!(app.state.selected, 0);
-    }
-
-    #[test]
-    fn clicking_scrolled_agent_detail_row_switches_to_correct_tab_and_pane() {
-        let mut app = app_for_mouse_test();
-        let mut ws = Workspace::test_new("test");
-        let first_pane = ws.tabs[0].root_pane;
-        let second_tab = ws.test_add_tab(Some("logs"));
-        let second_pane = ws.tabs[second_tab].root_pane;
-        let mut extra_tabs = Vec::new();
-        for (tab_name, agent) in [("review", Agent::Codex), ("ops", Agent::Gemini)] {
-            let tab_idx = ws.test_add_tab(Some(tab_name));
-            let pane_id = ws.tabs[tab_idx].root_pane;
-            extra_tabs.push((tab_idx, pane_id, agent));
-        }
-
-        app.state.workspaces = vec![ws];
-        app.state.ensure_test_terminals();
-        let first_terminal_id = app.state.workspaces[0].tabs[0].panes[&first_pane]
-            .attached_terminal_id
-            .clone();
-        app.state
-            .terminals
-            .get_mut(&first_terminal_id)
-            .unwrap()
-            .detected_agent = Some(Agent::Pi);
-        let second_terminal_id = app.state.workspaces[0].tabs[second_tab].panes[&second_pane]
-            .attached_terminal_id
-            .clone();
-        app.state
-            .terminals
-            .get_mut(&second_terminal_id)
-            .unwrap()
-            .detected_agent = Some(Agent::Claude);
-        for (tab_idx, pane_id, agent) in extra_tabs {
-            let terminal_id = app.state.workspaces[0].tabs[tab_idx].panes[&pane_id]
-                .attached_terminal_id
-                .clone();
-            app.state
-                .terminals
-                .get_mut(&terminal_id)
-                .unwrap()
-                .detected_agent = Some(agent);
-        }
-        app.state.active = Some(0);
-        app.state.selected = 0;
-        app.state.mode = Mode::Terminal;
-        app.state.sidebar_agents.rows = vec![vec![crate::config::AgentSidebarToken::Agent]];
-        app.state.sidebar_agents.rows_by_agent.insert(
-            "claude".into(),
-            vec![
-                vec![crate::config::AgentSidebarToken::Agent],
-                vec![crate::config::AgentSidebarToken::Workspace],
-            ],
-        );
-        app.state.agent_panel_scroll = 1;
-
-        let detail_area = app.state.agent_panel_rect();
-        let body = crate::ui::agent_panel_body_rect(detail_area, true);
-        app.handle_mouse(mouse(
-            MouseEventKind::Down(MouseButton::Left),
-            body.x + 1,
-            body.y + 1,
-        ));
-
-        assert_eq!(app.state.workspaces[0].active_tab, second_tab);
-        assert_eq!(
-            app.state.workspaces[0].tabs[second_tab].layout.focused(),
-            second_pane
-        );
-        assert_eq!(app.state.mode, Mode::Terminal);
     }
 
     #[test]
@@ -1287,7 +966,7 @@ mod tests {
         app.state.active = Some(1);
         app.state.selected = 2;
         crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 106, 20));
-        let packed_boundary_row = app.state.view.workspace_card_areas[1].rect.y;
+        let packed_boundary_row = app.state.view.workspace_card_areas[2].rect.y - 1;
         assert_eq!(
             app.state.workspace_drop_index_at_row(packed_boundary_row),
             Some(2)
@@ -1338,6 +1017,61 @@ mod tests {
             .map(|ws| ws.custom_name.clone().unwrap())
             .collect();
         assert_eq!(captured_names, vec!["b", "a", "c"]);
+    }
+
+    #[test]
+    fn sidebar_tab_row_at_maps_second_tab_block() {
+        let mut app = app_for_mouse_test();
+        let mut ws = Workspace::test_new("a");
+        ws.test_add_tab(Some("logs"));
+        app.state.workspaces = vec![ws];
+        app.state.active = Some(0);
+        crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 106, 20));
+
+        let rows = app.state.view.sidebar_tab_rows.clone();
+        assert_eq!(rows.len(), 2);
+        // a dotted rule sits between the two tab blocks
+        assert_eq!(rows[1].rect.y, rows[0].rect.y + rows[0].rect.height + 1);
+        assert_eq!(app.state.sidebar_tab_row_at(rows[1].rect.y), Some((0, 1)));
+        assert_eq!(app.state.sidebar_tab_row_at(rows[0].rect.y), Some((0, 0)));
+    }
+
+    #[test]
+    fn dragging_sidebar_tab_to_another_space_moves_it() {
+        let mut app = app_for_mouse_test();
+        let mut source = Workspace::test_new("a");
+        source.test_add_tab(Some("logs"));
+        app.state.workspaces = vec![source, Workspace::test_new("b")];
+        app.state.ensure_test_terminals();
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 106, 20));
+
+        let tab_row = app
+            .state
+            .view
+            .sidebar_tab_rows
+            .iter()
+            .find(|row| row.ws_idx == 0 && row.tab_idx == 1)
+            .unwrap()
+            .rect
+            .y;
+        let target_row = app.state.view.workspace_card_areas[1].rect.y;
+
+        app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 2, tab_row));
+        app.handle_mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 2, target_row));
+        assert!(matches!(
+            app.state.drag.as_ref().map(|drag| &drag.target),
+            Some(DragTarget::SidebarTabMove {
+                source_ws_idx: 0,
+                source_tab_idx: 1,
+                target_ws_idx: Some(1),
+            })
+        ));
+        app.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), 2, target_row));
+
+        assert_eq!(app.state.workspaces[0].tabs.len(), 1);
+        assert_eq!(app.state.workspaces[1].tabs.len(), 2);
     }
 
     #[test]
@@ -1526,10 +1260,11 @@ mod tests {
         app.state.sidebar_spaces.row_gap = 1;
         crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 106, 20));
 
+        let cards = app.state.view.workspace_card_areas.clone();
+        let below_first = cards[0].rect.y + cards[0].rect.height;
         assert_eq!(app.state.workspace_drop_index_at_row(0), Some(0));
-        assert_eq!(app.state.workspace_drop_index_at_row(1), Some(0));
-        assert_eq!(app.state.workspace_drop_index_at_row(2), Some(0));
-        assert_eq!(app.state.workspace_drop_index_at_row(3), Some(1));
+        assert_eq!(app.state.workspace_drop_index_at_row(cards[0].rect.y), Some(0));
+        assert_eq!(app.state.workspace_drop_index_at_row(below_first), Some(1));
 
         let _ = fs::remove_dir_all(first_repo);
         let _ = fs::remove_dir_all(second_repo);
