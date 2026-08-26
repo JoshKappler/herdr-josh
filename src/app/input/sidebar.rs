@@ -14,13 +14,8 @@ impl AppState {
     }
 
     pub(super) fn agent_panel_rect(&self) -> Rect {
-        let sidebar = self.view.sidebar_rect;
-        if self.sidebar_collapsed || sidebar.width <= 1 || sidebar.height == 0 {
-            return Rect::default();
-        }
-        let (_, detail_area) =
-            crate::ui::expanded_sidebar_sections(sidebar, self.sidebar_section_split);
-        detail_area
+        // unified sidebar: the expanded agent panel no longer exists
+        Rect::default()
     }
 
     pub(super) fn workspace_list_scrollbar_target_at(
@@ -318,6 +313,16 @@ impl AppState {
 
         cards.iter().find_map(|card| {
             (row >= card.rect.y && row < card.rect.y + card.rect.height).then_some(card.ws_idx)
+        })
+    }
+
+    pub(super) fn sidebar_tab_row_at(&self, row: u16) -> Option<(usize, usize)> {
+        if self.sidebar_footer_rect() == Rect::default() {
+            return None;
+        }
+        self.view.sidebar_tab_rows.iter().find_map(|tab_row| {
+            (row >= tab_row.rect.y && row < tab_row.rect.y + tab_row.rect.height)
+                .then_some((tab_row.ws_idx, tab_row.tab_idx))
         })
     }
 

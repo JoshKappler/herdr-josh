@@ -468,6 +468,85 @@ impl App {
         false
     }
 
+    pub(crate) fn focus_sidebar_tab_via_api(&mut self, ws_idx: usize, tab_idx: usize) {
+        let Some(tab_id) = self.public_tab_id(ws_idx, tab_idx) else {
+            return;
+        };
+        self.runtime_tab_focus("tui.sidebar.tab.focus", tab_id);
+    }
+
+    /// Drag a whole tab into another space: the first pane opens a new tab
+    /// there, remaining panes split into it.
+    pub(crate) fn move_sidebar_tab_via_api(
+        &mut self,
+        source_ws_idx: usize,
+        source_tab_idx: usize,
+        target_ws_idx: usize,
+    ) {
+        if source_ws_idx == target_ws_idx {
+            return;
+        }
+        let Some(target_workspace_id) = self
+            .state
+            .workspaces
+            .get(target_ws_idx)
+            .map(|ws| ws.id.clone())
+        else {
+            return;
+        };
+        let Some(tab) = self
+            .state
+            .workspaces
+            .get(source_ws_idx)
+            .and_then(|ws| ws.tabs.get(source_tab_idx))
+        else {
+            return;
+        };
+        let label = tab.custom_name.clone();
+        let pane_ids: Vec<String> = tab
+            .layout
+            .pane_ids()
+            .iter()
+            .filter_map(|pane_id| self.public_pane_id(source_ws_idx, *pane_id))
+            .collect();
+        let mut moved_tab_id: Option<String> = None;
+        for (idx, pane_id) in pane_ids.into_iter().enumerate() {
+            let destination = match &moved_tab_id {
+                None => crate::api::schema::PaneMoveDestination::NewTab {
+                    workspace_id: Some(target_workspace_id.clone()),
+                    label: label.clone(),
+                },
+                Some(tab_id) => crate::api::schema::PaneMoveDestination::Tab {
+                    tab_id: tab_id.clone(),
+                    target_pane_id: None,
+                    split: crate::api::schema::SplitDirection::Right,
+                    ratio: None,
+                },
+            };
+            let response = self.runtime_pane_move(
+                "tui.sidebar.tab.move",
+                crate::api::schema::PaneMoveParams {
+                    pane_id,
+                    destination,
+                    focus: idx == 0,
+                },
+            );
+            if moved_tab_id.is_none() {
+                moved_tab_id = serde_json::from_str::<serde_json::Value>(&response)
+                    .ok()
+                    .and_then(|value| {
+                        value
+                            .pointer("/result/created_tab/tab_id")
+                            .and_then(|id| id.as_str())
+                            .map(str::to_string)
+                    });
+                if moved_tab_id.is_none() {
+                    return;
+                }
+            }
+        }
+    }
+
     pub(crate) fn move_tab_via_api(
         &mut self,
         ws_idx: usize,

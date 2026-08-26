@@ -621,6 +621,14 @@ pub struct WorkspaceCardArea {
     pub indented: bool,
 }
 
+/// One tab's dashboard block inside a space card, for click and drag targets.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SidebarTabRow {
+    pub ws_idx: usize,
+    pub tab_idx: usize,
+    pub rect: Rect,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorktreeCreateState {
     pub source_workspace_id: String,
@@ -776,6 +784,7 @@ pub struct ViewState {
     pub layout: ViewLayout,
     pub sidebar_rect: Rect,
     pub workspace_card_areas: Vec<WorkspaceCardArea>,
+    pub sidebar_tab_rows: Vec<SidebarTabRow>,
     pub tab_bar_rect: Rect,
     pub tab_hit_areas: Vec<Rect>,
     pub tab_scroll_left_hit_area: Rect,
@@ -1173,6 +1182,11 @@ pub(crate) enum DragTarget {
     },
     SidebarDivider,
     SidebarSectionDivider,
+    SidebarTabMove {
+        source_ws_idx: usize,
+        source_tab_idx: usize,
+        target_ws_idx: Option<usize>,
+    },
 }
 
 /// Active mouse drag on a split border or sidebar divider.
@@ -1187,6 +1201,14 @@ pub(crate) struct WorkspacePressState {
 }
 
 pub(crate) struct TabPressState {
+    pub ws_idx: usize,
+    pub tab_idx: usize,
+    pub start_col: u16,
+    pub start_row: u16,
+}
+
+/// Press on a tab row inside the sidebar's unified space list.
+pub(crate) struct SidebarTabPressState {
     pub ws_idx: usize,
     pub tab_idx: usize,
     pub start_col: u16,
@@ -1461,6 +1483,7 @@ pub struct AppState {
     pub(crate) drag: Option<DragState>,
     pub(crate) workspace_press: Option<WorkspacePressState>,
     pub(crate) tab_press: Option<TabPressState>,
+    pub(crate) sidebar_tab_press: Option<SidebarTabPressState>,
     pub selection: Option<Selection>,
     pub selection_autoscroll: Option<SelectionAutoscroll>,
     pub context_menu: Option<ContextMenuState>,
@@ -1830,6 +1853,7 @@ impl AppState {
                 layout: ViewLayout::Desktop,
                 sidebar_rect: Rect::default(),
                 workspace_card_areas: Vec::new(),
+                sidebar_tab_rows: Vec::new(),
                 tab_bar_rect: Rect::default(),
                 tab_hit_areas: Vec::new(),
                 tab_scroll_left_hit_area: Rect::default(),
@@ -1845,6 +1869,7 @@ impl AppState {
             drag: None,
             workspace_press: None,
             tab_press: None,
+            sidebar_tab_press: None,
             selection: None,
             selection_autoscroll: None,
             context_menu: None,

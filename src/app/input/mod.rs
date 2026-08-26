@@ -352,6 +352,14 @@ impl App {
                         source_tab_idx,
                         insert_idx,
                     } => self.move_tab_via_api(ws_idx, source_tab_idx, insert_idx),
+                    MouseAction::FocusSpaceTab { ws_idx, tab_idx } => {
+                        self.focus_sidebar_tab_via_api(ws_idx, tab_idx)
+                    }
+                    MouseAction::MoveTabToSpace {
+                        source_ws_idx,
+                        source_tab_idx,
+                        target_ws_idx,
+                    } => self.move_sidebar_tab_via_api(source_ws_idx, source_tab_idx, target_ws_idx),
                     MouseAction::SetSplitRatio { path, ratio } => {
                         self.set_split_ratio_via_api(path, ratio)
                     }

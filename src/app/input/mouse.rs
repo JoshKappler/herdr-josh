@@ -48,6 +48,15 @@ pub(super) enum MouseAction {
         source_tab_idx: usize,
         insert_idx: usize,
     },
+    FocusSpaceTab {
+        ws_idx: usize,
+        tab_idx: usize,
+    },
+    MoveTabToSpace {
+        source_ws_idx: usize,
+        source_tab_idx: usize,
+        target_ws_idx: usize,
+    },
     SetSplitRatio {
         path: Vec<bool>,
         ratio: f32,
@@ -224,6 +233,7 @@ impl AppState {
                 self.selection = None;
                 self.selection_autoscroll = None;
                 self.workspace_press = None;
+                self.sidebar_tab_press = None;
 
                 if self.mode == Mode::ConfirmClose {
                     let popup = self.confirm_close_rect();
@@ -580,6 +590,17 @@ impl AppState {
                         }
                     }
 
+                    if let Some((ws_idx, tab_idx)) = self.sidebar_tab_row_at(mouse.row) {
+                        self.sidebar_tab_press =
+                            Some(crate::app::state::SidebarTabPressState {
+                                ws_idx,
+                                tab_idx,
+                                start_col: mouse.column,
+                                start_row: mouse.row,
+                            });
+                        return None;
+                    }
+
                     if let Some(idx) = self.workspace_at_row(mouse.row) {
                         self.workspace_press = Some(WorkspacePressState {
                             ws_idx: idx,
@@ -691,6 +712,7 @@ impl AppState {
 
                 let workspace_drop_index = self.workspace_drop_index_at_row(mouse.row);
                 let tab_drop_index = self.tab_drop_index_at(mouse.column, mouse.row);
+                let sidebar_tab_move_target = self.workspace_at_row(mouse.row);
                 if self.drag.is_none() {
                     if let Some(press) = &self.workspace_press {
                         let delta_col = mouse.column.abs_diff(press.start_col);
@@ -719,6 +741,18 @@ impl AppState {
                                 },
                             });
                         }
+                    } else if let Some(press) = &self.sidebar_tab_press {
+                        let delta_col = mouse.column.abs_diff(press.start_col);
+                        let delta_row = mouse.row.abs_diff(press.start_row);
+                        if delta_col.max(delta_row) >= TAB_DRAG_THRESHOLD {
+                            self.drag = Some(DragState {
+                                target: DragTarget::SidebarTabMove {
+                                    source_ws_idx: press.ws_idx,
+                                    source_tab_idx: press.tab_idx,
+                                    target_ws_idx: sidebar_tab_move_target,
+                                },
+                            });
+                        }
                     }
                 }
 
@@ -737,9 +771,16 @@ impl AppState {
                     if self.active == Some(*ws_idx) {
                         *insert_idx = tab_drop_index;
                     }
+                } else if let Some(DragState {
+                    target: DragTarget::SidebarTabMove { target_ws_idx, .. },
+                }) = &mut self.drag
+                {
+                    *target_ws_idx = sidebar_tab_move_target;
                 } else if let Some(drag) = &self.drag {
                     match &drag.target {
-                        DragTarget::WorkspaceReorder { .. } | DragTarget::TabReorder { .. } => {}
+                        DragTarget::WorkspaceReorder { .. }
+                        | DragTarget::TabReorder { .. }
+                        | DragTarget::SidebarTabMove { .. } => {}
                         DragTarget::WorkspaceListScrollbar { grab_row_offset } => {
                             if let Some(offset_from_bottom) =
                                 self.workspace_list_offset_for_drag_row(mouse.row, *grab_row_offset)
@@ -820,6 +861,7 @@ impl AppState {
                     let was_finalized = selection.is_finalized();
 
                     self.workspace_press = None;
+                    self.sidebar_tab_press = None;
                     self.tab_press = None;
                     self.drag = None;
                     self.selection_autoscroll = None;
@@ -849,6 +891,7 @@ impl AppState {
                             self.selection = None;
                             self.selection_autoscroll = None;
                             self.workspace_press = None;
+                            self.sidebar_tab_press = None;
                             self.tab_press = None;
                             self.drag = None;
                             return None;
@@ -858,6 +901,7 @@ impl AppState {
 
                 let workspace_press = self.workspace_press.take();
                 let tab_press = self.tab_press.take();
+                let sidebar_tab_press = self.sidebar_tab_press.take();
                 match self.drag.take() {
                     Some(DragState {
                         target:
@@ -869,6 +913,20 @@ impl AppState {
                         return Some(MouseAction::MoveWorkspace {
                             source_ws_idx,
                             insert_idx,
+                        });
+                    }
+                    Some(DragState {
+                        target:
+                            DragTarget::SidebarTabMove {
+                                source_ws_idx,
+                                source_tab_idx,
+                                target_ws_idx: Some(target_ws_idx),
+                            },
+                    }) if target_ws_idx != source_ws_idx => {
+                        return Some(MouseAction::MoveTabToSpace {
+                            source_ws_idx,
+                            source_tab_idx,
+                            target_ws_idx,
                         });
                     }
                     Some(DragState {
@@ -890,6 +948,13 @@ impl AppState {
                     }
                     Some(_) => {}
                     None => {
+                        if let Some(press) = sidebar_tab_press {
+                            self.mode = Mode::Terminal;
+                            return Some(MouseAction::FocusSpaceTab {
+                                ws_idx: press.ws_idx,
+                                tab_idx: press.tab_idx,
+                            });
+                        }
                         if let Some(press) = workspace_press {
                             self.mode = Mode::Terminal;
                             return Some(MouseAction::FocusWorkspace {
@@ -1015,11 +1080,22 @@ impl AppState {
 
             MouseEventKind::Down(MouseButton::Right) if in_sidebar && !self.sidebar_collapsed => {
                 self.workspace_press = None;
+                self.sidebar_tab_press = None;
                 self.tab_press = None;
                 if self
                     .workspace_list_scrollbar_target_at(mouse.column, mouse.row)
                     .is_some()
                 {
+                    return None;
+                }
+                if let Some((ws_idx, tab_idx)) = self.sidebar_tab_row_at(mouse.row) {
+                    self.context_menu = Some(ContextMenuState {
+                        kind: ContextMenuKind::Tab { ws_idx, tab_idx },
+                        x: mouse.column,
+                        y: mouse.row,
+                        list: MenuListState::new(0),
+                    });
+                    self.mode = Mode::ContextMenu;
                     return None;
                 }
                 if let Some(idx) = self.workspace_at_row(mouse.row) {
@@ -1562,6 +1638,7 @@ impl AppState {
         self.selection = None;
         self.selection_autoscroll = None;
         self.workspace_press = None;
+        self.sidebar_tab_press = None;
         self.tab_press = None;
         self.drag = None;
         self.context_menu = None;

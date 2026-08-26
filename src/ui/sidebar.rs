@@ -8,9 +8,9 @@ use ratatui::{
     Frame,
 };
 
-use self::tokens::{ResolvedToken, ResolvedTokenKind, SpaceTokenContext};
+use self::tokens::{ResolvedToken, ResolvedTokenKind};
 use super::scrollbar::{render_scrollbar, should_show_scrollbar};
-use super::status::{agent_icon, state_dot, state_label, state_label_color};
+use super::status::{agent_icon, state_dot, state_label};
 use super::text::{display_width, display_width_u16, truncate_end};
 use crate::app::state::{AgentPanelSort, Palette};
 use crate::app::{AppState, Mode};
@@ -193,33 +193,107 @@ pub(super) fn agent_panel_status_key(state: AgentState, seen: bool) -> &'static 
     }
 }
 
-fn workspace_row_height(app: &AppState, ws: &crate::workspace::Workspace, indented: bool) -> u16 {
-    let (state, seen) = ws.aggregate_state(&app.terminals);
-    let label = if indented {
-        grouped_child_display_label(
-            &ws.display_name(),
-            ws.branch().as_deref(),
-            ws.custom_name.is_some(),
-        )
+/// One rendered line of a tab's dashboard block.
+pub(crate) enum TabDashRow {
+    Title {
+        text: String,
+        state: AgentState,
+        seen: bool,
+        since_ms: Option<u64>,
+    },
+    Detail(String),
+    Counts(String),
+    Lane(String),
+}
+
+pub(crate) struct TabDash {
+    pub tab_idx: usize,
+    pub rows: Vec<TabDashRow>,
+}
+
+const TAB_LANE_KEYS: [&str; 7] = ["l1", "l2", "l3", "l4", "l5", "l6", "lmore"];
+
+fn tab_attention(
+    app: &AppState,
+    tab: &crate::workspace::Tab,
+) -> (AgentState, bool, Option<u64>) {
+    tab.panes
+        .values()
+        .filter_map(|pane| {
+            let terminal = app.terminals.get(&pane.attached_terminal_id)?;
+            Some((terminal.state, pane.seen, terminal.last_agent_state_change_at))
+        })
+        .max_by_key(|(state, seen, _)| workspace_attention_priority(*state, *seen))
+        .unwrap_or((AgentState::Unknown, true, None))
+}
+
+fn fmt_elapsed(since_ms: u64) -> String {
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(since_ms);
+    let mins = now_ms.saturating_sub(since_ms) / 60_000;
+    if mins >= 60 {
+        format!("{}h{:02}", mins / 60, mins % 60)
     } else {
-        ws.display_name()
-    };
-    let token_values = ws.metadata_tokens.values();
-    let content_rows = tokens::space_rows(
-        &app.sidebar_spaces,
-        SpaceTokenContext {
-            workspace: &label,
-            branch: ws.branch().as_deref(),
-            state_text: state_label(state, seen),
-            ahead_behind: ws.git_ahead_behind(),
-            tokens: &token_values,
-            suppress_git_details: indented,
-        },
-    )
-    .len()
-    .max(1)
-    .min((u16::MAX - 1) as usize) as u16;
-    content_rows.saturating_add(1)
+        format!("{mins}m")
+    }
+}
+
+pub(crate) fn tab_dashboards(
+    app: &AppState,
+    ws: &crate::workspace::Workspace,
+) -> Vec<TabDash> {
+    ws.tabs
+        .iter()
+        .enumerate()
+        .map(|(tab_idx, tab)| {
+            let toks = tab.metadata_tokens.values();
+            let (state, seen, since_ms) = tab_attention(app, tab);
+            let title = toks
+                .get("t")
+                .filter(|t| !t.is_empty())
+                .cloned()
+                .or_else(|| {
+                    ws.tab_display_name(tab_idx)
+                        .filter(|label| !label.chars().all(|c| c.is_ascii_digit()))
+                })
+                .unwrap_or_else(|| "shell".to_string());
+            let mut rows = vec![TabDashRow::Title {
+                text: title,
+                state,
+                seen,
+                since_ms,
+            }];
+            if let Some(s) = toks.get("s1").filter(|s| !s.is_empty()) {
+                rows.push(TabDashRow::Detail(s.clone()));
+            }
+            if let Some(s) = toks.get("hdr").filter(|s| !s.is_empty()) {
+                rows.push(TabDashRow::Counts(s.clone()));
+            }
+            for key in TAB_LANE_KEYS {
+                if let Some(s) = toks.get(key).filter(|s| !s.is_empty()) {
+                    rows.push(TabDashRow::Lane(s.clone()));
+                }
+            }
+            TabDash { tab_idx, rows }
+        })
+        .collect()
+}
+
+/// Grouped worktree members and manually named spaces keep an identity row;
+/// an ordinary space is nothing but its tabs.
+fn workspace_name_row_visible(ws: &crate::workspace::Workspace) -> bool {
+    ws.custom_name.is_some() || ws.worktree_space().is_some()
+}
+
+fn workspace_row_height(app: &AppState, ws: &crate::workspace::Workspace, _indented: bool) -> u16 {
+    let dashes = tab_dashboards(app, ws);
+    let tab_rows: usize = dashes.iter().map(|d| d.rows.len()).sum();
+    let content = usize::from(workspace_name_row_visible(ws))
+        + tab_rows
+        + dashes.len().saturating_sub(1);
+    (content.max(1).min((u16::MAX - 1) as usize) as u16).saturating_add(1)
 }
 
 fn workspace_row_height_in_body(
@@ -443,9 +517,9 @@ fn workspace_list_entries_inner(app: &AppState, force_expanded: bool) -> Vec<Wor
     entries
 }
 
-pub(crate) fn workspace_list_rect(area: Rect, split_ratio: f32) -> Rect {
-    let (ws_area, _) = expanded_sidebar_sections(area, split_ratio);
-    ws_area
+pub(crate) fn workspace_list_rect(area: Rect, _split_ratio: f32) -> Rect {
+    // unified sidebar (Josh 2026-08-26): the space list owns the full column
+    Rect::new(area.x, area.y, area.width.saturating_sub(1), area.height)
 }
 
 pub(crate) fn workspace_list_body_rect(area: Rect, has_scrollbar: bool) -> Rect {
@@ -665,7 +739,10 @@ pub(crate) fn agent_panel_scrollbar_rect(app: &AppState, area: Rect) -> Option<R
 pub(crate) fn compute_workspace_list_areas(
     app: &AppState,
     area: Rect,
-) -> (Vec<crate::app::state::WorkspaceCardArea>, Vec<()>) {
+) -> (
+    Vec<crate::app::state::WorkspaceCardArea>,
+    Vec<crate::app::state::SidebarTabRow>,
+) {
     let ws_area = workspace_list_rect(area, app.sidebar_section_split);
     if ws_area == Rect::default() {
         return (Vec::new(), Vec::new());
@@ -681,7 +758,7 @@ pub(crate) fn compute_workspace_list_areas(
     let mut row_y = body.y;
     let body_bottom = body.y + body.height;
     let mut cards = Vec::new();
-    let headers = Vec::new();
+    let mut tab_rows = Vec::new();
 
     let entries = workspace_list_entries(app);
     for (entry_idx, entry) in entries.iter().enumerate().skip(scroll) {
@@ -700,6 +777,25 @@ pub(crate) fn compute_workspace_list_areas(
                     rect: Rect::new(body.x, row_y, body.width, row_height),
                     indented: *indented,
                 });
+                let content_bottom = row_y
+                    .saturating_add(row_height.saturating_sub(1))
+                    .min(body_bottom);
+                let mut tab_y = row_y + u16::from(workspace_name_row_visible(ws));
+                for (i, dash) in tab_dashboards(app, ws).iter().enumerate() {
+                    if i > 0 {
+                        tab_y = tab_y.saturating_add(1);
+                    }
+                    if tab_y >= content_bottom {
+                        break;
+                    }
+                    let height = (dash.rows.len() as u16).min(content_bottom - tab_y);
+                    tab_rows.push(crate::app::state::SidebarTabRow {
+                        ws_idx: *ws_idx,
+                        tab_idx: dash.tab_idx,
+                        rect: Rect::new(body.x, tab_y, body.width, height),
+                    });
+                    tab_y = tab_y.saturating_add(height);
+                }
                 row_y = row_y
                     .saturating_add(row_height)
                     .saturating_add(gap)
@@ -708,7 +804,7 @@ pub(crate) fn compute_workspace_list_areas(
         }
     }
 
-    (cards, headers)
+    (cards, tab_rows)
 }
 
 pub(crate) fn compute_workspace_card_areas(
@@ -891,10 +987,9 @@ pub(super) fn render_sidebar(
         buf[(sep_x, y)].set_style(sep_style);
     }
 
-    let (ws_area, detail_area) = expanded_sidebar_sections(area, app.sidebar_section_split);
+    let ws_area = workspace_list_rect(area, app.sidebar_section_split);
 
     render_workspace_list(app, terminal_runtimes, frame, ws_area, is_navigating);
-    render_agent_detail(app, terminal_runtimes, frame, detail_area);
     render_sidebar_toggle(app, frame, area, false, p);
 }
 
@@ -1189,13 +1284,21 @@ fn render_workspace_list(
         let selected = i == app.selected && is_navigating;
         let is_active = Some(i) == app.active;
         let is_dragged = dragged_ws_idx == Some(i);
-        let highlighted = selected || is_active || is_dragged;
+        let is_drop_target = matches!(
+            app.drag.as_ref().map(|drag| &drag.target),
+            Some(crate::app::state::DragTarget::SidebarTabMove {
+                source_ws_idx,
+                target_ws_idx: Some(target),
+                ..
+            }) if *target == i && *source_ws_idx != i
+        );
+        let highlighted = selected || is_active || is_dragged || is_drop_target;
         let (agg_state, agg_seen) = ws.aggregate_state(&app.terminals);
 
         if highlighted {
             let bg = if selected {
                 p.surface0
-            } else if is_dragged {
+            } else if is_dragged || is_drop_target {
                 p.surface1
             } else {
                 p.surface_dim
@@ -1232,81 +1335,182 @@ fn render_workspace_list(
             .map(|(key, _)| space_aggregate_state(app, key))
             .unwrap_or((agg_state, agg_seen));
         let state_icon = state_dot(display_state, display_seen, p);
-        let state_text_style = Style::default()
-            .fg(state_label_color(display_state, display_seen, p))
-            .add_modifier(Modifier::DIM);
-        let branch_style = Style::default().fg(if selected || is_active {
-            p.mauve
-        } else {
-            p.overlay0
-        });
-        let token_values = ws.metadata_tokens.values();
-        let rows = tokens::space_rows(
-            &app.sidebar_spaces,
-            SpaceTokenContext {
-                workspace: &display_label,
-                branch: ws.branch().as_deref(),
-                state_text: state_label(display_state, display_seen),
-                ahead_behind: ws.git_ahead_behind(),
-                tokens: &token_values,
-                suppress_git_details: card.indented,
-            },
-        );
 
-        for (row_index, resolved) in rows.iter().enumerate() {
-            if row_index as u16 >= content_height || row_y + row_index as u16 >= list_bottom {
-                break;
-            }
+        let content_bottom = (row_y + content_height).min(list_bottom);
+        let mut y = row_y;
+        if workspace_name_row_visible(ws) && y < content_bottom {
             let mut spans = Vec::new();
-            let prefix_width = if row_index == 0 {
-                if let Some((_, collapsed)) = parent_group.as_ref() {
-                    spans.push(Span::styled(
-                        if *collapsed { "▸" } else { "▾" },
-                        Style::default().fg(p.accent),
-                    ));
-                    spans.push(Span::raw(" "));
-                    2
-                } else {
-                    spans.push(Span::raw(" "));
-                    1
-                }
+            let prefix_width = if let Some((_, collapsed)) = parent_group.as_ref() {
+                spans.push(Span::styled(
+                    if *collapsed { "▸" } else { "▾" },
+                    Style::default().fg(p.accent),
+                ));
+                spans.push(Span::raw(" "));
+                2
             } else {
                 spans.push(Span::raw(" "));
                 1
             };
-            let trailing_width = if row_index == 0 { 3 } else { 0 };
-            spans.extend(resolved_token_spans(
-                resolved,
-                state_icon,
-                state_text_style,
-                name_style,
-                branch_style,
-                branch_style,
-                p,
-                card.rect
-                    .width
-                    .saturating_sub(prefix_width + trailing_width) as usize,
+            let style = if ws.custom_name.is_some() {
+                Style::default().fg(p.blue).add_modifier(Modifier::BOLD)
+            } else {
+                name_style
+            };
+            spans.push(Span::styled(
+                truncate_end(
+                    &display_label,
+                    card.rect.width.saturating_sub(prefix_width + 3) as usize,
+                ),
+                style,
             ));
             frame.render_widget(
                 Paragraph::new(Line::from(spans)),
-                Rect::new(card.rect.x, row_y + row_index as u16, card.rect.width, 1),
+                Rect::new(card.rect.x, y, card.rect.width, 1),
             );
+            if card.rect.width >= 2 {
+                frame.render_widget(
+                    Paragraph::new(Span::styled(state_icon.0, state_icon.1)),
+                    Rect::new(card.rect.x + card.rect.width - 2, y, 1, 1),
+                );
+            }
+            y = y.saturating_add(1);
         }
 
-        if content_height > 0 && card.rect.width >= 2 {
-            frame.render_widget(
-                Paragraph::new(Span::styled(state_icon.0, state_icon.1)),
-                Rect::new(card.rect.x + card.rect.width - 2, row_y, 1, 1),
-            );
+        let collapsed_group = parent_group
+            .as_ref()
+            .is_some_and(|(_, collapsed)| *collapsed);
+        let dashes = if collapsed_group {
+            Vec::new()
+        } else {
+            tab_dashboards(app, ws)
+        };
+        'tabs: for (di, dash) in dashes.iter().enumerate() {
+            if di > 0 {
+                if y >= content_bottom {
+                    break;
+                }
+                let buf = frame.buffer_mut();
+                for x in card.rect.x..card.rect.x + card.rect.width {
+                    buf[(x, y)].set_symbol(if (x - card.rect.x) % 2 == 0 { "─" } else { " " });
+                    buf[(x, y)].set_style(
+                        Style::default().fg(p.overlay0).add_modifier(Modifier::DIM),
+                    );
+                }
+                y = y.saturating_add(1);
+            }
+            let tab_is_active = is_active && dash.tab_idx == ws.active_tab;
+            for row in &dash.rows {
+                if y >= content_bottom {
+                    break 'tabs;
+                }
+                match row {
+                    TabDashRow::Title {
+                        text,
+                        state,
+                        seen,
+                        since_ms,
+                    } => {
+                        let dot = state_dot(*state, *seen, p);
+                        let elapsed = matches!(state, AgentState::Working)
+                            .then_some(*since_ms)
+                            .flatten()
+                            .map(fmt_elapsed);
+                        let status_width = 1
+                            + elapsed
+                                .as_ref()
+                                .map(|e| display_width(e) + 1)
+                                .unwrap_or(0);
+                        let title_style = if tab_is_active || selected {
+                            Style::default().fg(p.text).add_modifier(Modifier::BOLD)
+                        } else {
+                            Style::default().fg(p.text)
+                        };
+                        let avail = card
+                            .rect
+                            .width
+                            .saturating_sub(status_width as u16 + 3)
+                            as usize;
+                        frame.render_widget(
+                            Paragraph::new(Line::from(vec![
+                                Span::raw(" "),
+                                Span::styled(truncate_end(text, avail), title_style),
+                            ])),
+                            Rect::new(card.rect.x, y, card.rect.width, 1),
+                        );
+                        let mut status_spans = Vec::new();
+                        if let Some(e) = elapsed {
+                            status_spans
+                                .push(Span::styled(e, Style::default().fg(p.subtext0)));
+                            status_spans.push(Span::raw(" "));
+                        }
+                        status_spans.push(Span::styled(dot.0.to_string(), dot.1));
+                        let status_x = card
+                            .rect
+                            .x
+                            .saturating_add(card.rect.width.saturating_sub(status_width as u16 + 1));
+                        frame.render_widget(
+                            Paragraph::new(Line::from(status_spans)),
+                            Rect::new(status_x, y, status_width as u16, 1),
+                        );
+                    }
+                    TabDashRow::Detail(text) => {
+                        frame.render_widget(
+                            Paragraph::new(Line::from(vec![
+                                Span::raw(" "),
+                                Span::styled(
+                                    truncate_end(
+                                        text,
+                                        card.rect.width.saturating_sub(2) as usize,
+                                    ),
+                                    Style::default().fg(p.subtext0),
+                                ),
+                            ])),
+                            Rect::new(card.rect.x, y, card.rect.width, 1),
+                        );
+                    }
+                    TabDashRow::Counts(text) => {
+                        frame.render_widget(
+                            Paragraph::new(Line::from(vec![
+                                Span::raw("  "),
+                                Span::styled(
+                                    truncate_end(
+                                        text,
+                                        card.rect.width.saturating_sub(3) as usize,
+                                    ),
+                                    Style::default()
+                                        .fg(p.overlay1)
+                                        .add_modifier(Modifier::DIM),
+                                ),
+                            ])),
+                            Rect::new(card.rect.x, y, card.rect.width, 1),
+                        );
+                    }
+                    TabDashRow::Lane(text) => {
+                        frame.render_widget(
+                            Paragraph::new(Line::from(vec![
+                                Span::raw("  "),
+                                Span::styled(
+                                    truncate_end(
+                                        text,
+                                        card.rect.width.saturating_sub(3) as usize,
+                                    ),
+                                    Style::default().fg(p.overlay0),
+                                ),
+                            ])),
+                            Rect::new(card.rect.x, y, card.rect.width, 1),
+                        );
+                    }
+                }
+                y = y.saturating_add(1);
+            }
         }
 
-        // Rule between spaces (Josh 2026-08-26): a half-block bar, about
-        // triple a heavy line's stroke; thinner forms read poorly here.
+        // Rule between spaces (Josh 2026-08-26): about triple a hairline
         let separator_y = row_y + content_height;
         if separator_y < list_bottom {
             let buf = frame.buffer_mut();
             for x in card.rect.x..card.rect.x + card.rect.width {
-                buf[(x, separator_y)].set_symbol("▄");
+                buf[(x, separator_y)].set_symbol("▂");
                 buf[(x, separator_y)].set_style(Style::default().fg(p.text));
             }
         }
@@ -1321,144 +1525,6 @@ fn render_workspace_list(
             buf[(x, y)].set_symbol("─");
             buf[(x, y)].set_style(Style::default().fg(p.accent));
         }
-    }
-
-    if let Some(track) = scrollbar_rect {
-        render_scrollbar(frame, metrics, track, p.surface_dim, p.overlay0, "▕");
-    }
-}
-
-fn render_agent_detail(
-    app: &AppState,
-    terminal_runtimes: &TerminalRuntimeRegistry,
-    frame: &mut Frame,
-    area: Rect,
-) {
-    let p = &app.palette;
-
-    if area.height < 3 {
-        return;
-    }
-
-    let sep_line = "─".repeat(area.width as usize);
-    frame.render_widget(
-        Paragraph::new(Span::styled(&sep_line, Style::default().fg(p.text))),
-        Rect::new(area.x, area.y, area.width, 1),
-    );
-
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![Span::styled(
-            " agents",
-            Style::default().fg(p.overlay0).add_modifier(Modifier::BOLD),
-        )])),
-        Rect::new(area.x, area.y + 1, area.width, 1),
-    );
-    let control_label = active_agent_view_label(app)
-        .unwrap_or_else(|| agent_panel_sort_label(app.agent_panel_sort));
-    let toggle_rect = agent_panel_header_label_rect(area, control_label);
-    if toggle_rect != Rect::default() {
-        let color = if app.agent_view_override.is_some() {
-            p.accent
-        } else {
-            p.overlay0
-        };
-        frame.render_widget(
-            Paragraph::new(Span::styled(
-                control_label,
-                Style::default().fg(color).add_modifier(Modifier::BOLD),
-            ))
-            .alignment(Alignment::Right),
-            toggle_rect,
-        );
-    }
-
-    let details = agent_panel_entries_from(app, terminal_runtimes);
-    let metrics = agent_panel_scroll_metrics(app, area);
-    let scrollbar_rect = agent_panel_scrollbar_rect(app, area);
-    let body = agent_panel_body_rect(area, should_show_scrollbar(metrics));
-    if body == Rect::default() {
-        return;
-    }
-    if details.is_empty() && app.agent_view_override.is_some() {
-        frame.render_widget(
-            Paragraph::new(" no matching agents")
-                .style(Style::default().fg(p.overlay0).add_modifier(Modifier::DIM)),
-            Rect::new(body.x, body.y, body.width, 1),
-        );
-        return;
-    }
-
-    let scroll = app.agent_panel_scroll.min(metrics.max_offset_from_bottom);
-    let mut row_y = body.y;
-    let body_bottom = body.y + body.height;
-    for (index, detail) in details.iter().enumerate().skip(scroll) {
-        let label_color = state_label_color(detail.state, detail.seen, p);
-        let rows = resolved_agent_rows(app, detail);
-        let height = (rows.len().max(1) as u16).min(body.height);
-        if row_y.saturating_add(height) > body_bottom {
-            break;
-        }
-
-        let is_active = app.is_active_pane(detail.ws_idx, detail.tab_idx, detail.pane_id);
-        let row_style = if is_active {
-            Style::default().bg(p.surface_dim)
-        } else {
-            Style::default()
-        };
-        let name_style = if is_active {
-            Style::default().fg(p.text).add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(p.subtext0).add_modifier(Modifier::BOLD)
-        };
-        let status_style = if is_active {
-            Style::default().fg(label_color)
-        } else {
-            Style::default().fg(label_color).add_modifier(Modifier::DIM)
-        };
-        let agent_style = Style::default().fg(p.overlay0).add_modifier(Modifier::DIM);
-        let state_icon = agent_icon(detail.state, detail.seen, app.spinner_tick, p);
-
-        for (row_index, resolved) in rows.iter().take(height as usize).enumerate() {
-            let mut spans = vec![Span::raw(if row_index == 0 { " " } else { "   " })];
-            spans.extend(resolved_token_spans(
-                resolved,
-                state_icon,
-                status_style,
-                name_style,
-                agent_style,
-                agent_style,
-                p,
-                body.width
-                    .saturating_sub(if row_index == 0 { 1 } else { 3 }) as usize,
-            ));
-            frame.render_widget(
-                Paragraph::new(Line::from(spans)).style(row_style),
-                Rect::new(body.x, row_y + row_index as u16, body.width, 1),
-            );
-        }
-        // Space-group rule (Josh 2026-08-26): under grouped sort, the gap row
-        // between entries of different workspaces carries the same half-block
-        // bar the spaces list uses.
-        let gap = agent_entry_gap(app, index, details.len());
-        if gap > 0
-            && app.agent_panel_sort == AgentPanelSort::Spaces
-            && details
-                .get(index + 1)
-                .is_some_and(|next| next.ws_idx != detail.ws_idx)
-        {
-            let sep_y = row_y.saturating_add(height);
-            if sep_y < body_bottom {
-                let buf = frame.buffer_mut();
-                for x in body.x..body.x + body.width {
-                    buf[(x, sep_y)].set_symbol("▄");
-                    buf[(x, sep_y)].set_style(Style::default().fg(p.text));
-                }
-            }
-        }
-        row_y = row_y
-            .saturating_add(height)
-            .saturating_add(gap)
-            .min(body_bottom);
     }
 
     if let Some(track) = scrollbar_rect {
@@ -1730,36 +1796,6 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
         assert!(spans
             .iter()
             .all(|span| { span.style.fg == Some(ratatui::style::Color::Rgb(0x12, 0x34, 0x56)) }));
-    }
-
-    #[test]
-    fn default_agent_row_gap_packs_rendering_and_scroll_geometry() {
-        let mut app = crate::app::state::AppState::test_new();
-        app.workspaces = vec![Workspace::test_new("one"), Workspace::test_new("two")];
-        app.ensure_test_terminals();
-        for (workspace, agent) in app.workspaces.iter().zip([Agent::Pi, Agent::Claude]) {
-            let pane_id = workspace.tabs[0].root_pane;
-            let terminal_id = workspace.tabs[0].panes[&pane_id]
-                .attached_terminal_id
-                .clone();
-            app.terminals.get_mut(&terminal_id).unwrap().detected_agent = Some(agent);
-        }
-        app.sidebar_agents.rows = vec![vec![crate::config::AgentSidebarToken::Agent]];
-        assert_eq!(app.sidebar_agents.row_gap, 0);
-
-        let area = Rect::new(0, 0, 20, 5);
-        let metrics = agent_panel_scroll_metrics(&app, area);
-        let body = agent_panel_body_rect(area, false);
-        let mut terminal = Terminal::new(TestBackend::new(20, 5)).unwrap();
-        terminal
-            .draw(|frame| render_agent_detail(&app, &TerminalRuntimeRegistry::new(), frame, area))
-            .unwrap();
-        let buffer = terminal.backend().buffer();
-
-        assert_eq!(metrics.viewport_rows, 2);
-        assert_eq!(metrics.max_offset_from_bottom, 0);
-        assert_eq!(row_text(buffer, body.y, body.width), " pi");
-        assert_eq!(row_text(buffer, body.y + 1, body.width), " claude");
     }
 
     #[test]
