@@ -787,15 +787,9 @@ pub(crate) fn workspace_list_scroll_metrics(
     }
 }
 
-pub(crate) fn workspace_list_scrollbar_rect(app: &AppState, area: Rect) -> Option<Rect> {
-    let metrics = workspace_list_scroll_metrics(app, area);
-    let body = workspace_list_body_rect(area, true);
-    (should_show_scrollbar(metrics) && body.width > 0 && body.height > 0).then_some(Rect::new(
-        area.x + area.width.saturating_sub(1),
-        body.y,
-        1,
-        body.height,
-    ))
+pub(crate) fn workspace_list_scrollbar_rect(_app: &AppState, _area: Rect) -> Option<Rect> {
+    // the list wheel-scrolls with no visible indicator (Josh 2026-08-26)
+    None
 }
 
 pub(crate) fn agent_panel_body_rect(area: Rect, has_scrollbar: bool) -> Rect {
@@ -934,8 +928,7 @@ pub(crate) fn compute_workspace_list_areas(
         return (Vec::new(), Vec::new());
     }
 
-    let metrics = workspace_list_scroll_metrics(app, ws_area);
-    let body = workspace_list_body_rect(ws_area, should_show_scrollbar(metrics));
+    let body = workspace_list_body_rect(ws_area, false);
     if body.width == 0 || body.height == 0 {
         return (Vec::new(), Vec::new());
     }
@@ -1440,8 +1433,6 @@ fn render_workspace_list(
         render_header_button(frame, app.sidebar_panel_toggle_rect(), "◫", plain, p);
     }
 
-    let metrics = workspace_list_scroll_metrics(app, area);
-    let scrollbar_rect = workspace_list_scrollbar_rect(app, area);
     let cards = &app.view.workspace_card_areas;
 
     for card in cards {
@@ -1636,18 +1627,11 @@ fn render_workspace_list(
     }
 
     if let Some(y) = insertion_row.filter(|y| *y < list_bottom) {
-        let indicator_right = scrollbar_rect
-            .map(|rect| rect.x)
-            .unwrap_or(area.x + area.width);
         let buf = frame.buffer_mut();
-        for x in area.x..indicator_right {
+        for x in area.x..area.x + area.width {
             buf[(x, y)].set_symbol("─");
             buf[(x, y)].set_style(Style::default().fg(p.accent));
         }
-    }
-
-    if let Some(track) = scrollbar_rect {
-        render_scrollbar(frame, metrics, track, p.surface_dim, p.overlay0, "▕");
     }
 }
 
