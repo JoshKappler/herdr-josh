@@ -201,6 +201,7 @@ pub(crate) enum TabDashRow {
         seen: bool,
         since_ms: Option<u64>,
     },
+    TitleCont(String),
     Counts(String),
     Lane(String),
 }
@@ -239,9 +240,42 @@ fn fmt_elapsed(since_ms: u64) -> String {
     }
 }
 
+/// Right-hand cells held clear of the title row for the elapsed time + dot.
+const TITLE_STATUS_RESERVE: u16 = 8;
+
+/// Split a tab line at a word boundary so long task prose wraps to a second
+/// row instead of eliding (Josh 2026-08-26).
+fn wrap_title(text: &str, width: u16) -> (String, Option<String>) {
+    let first = (width.saturating_sub(1 + TITLE_STATUS_RESERVE) as usize).max(8);
+    if display_width(text) <= first {
+        return (text.to_string(), None);
+    }
+    let mut break_at = None;
+    let mut last_fit = 0;
+    let mut used = 0usize;
+    for (i, ch) in text.char_indices() {
+        let w = display_width(ch.encode_utf8(&mut [0u8; 4]));
+        if used + w > first {
+            break;
+        }
+        used += w;
+        last_fit = i + ch.len_utf8();
+        if ch == ' ' {
+            break_at = Some(i);
+        }
+    }
+    let (head, tail) = match break_at {
+        Some(i) => (&text[..i], text[i..].trim_start()),
+        None => (&text[..last_fit], &text[last_fit..]),
+    };
+    let rest = (width as usize).saturating_sub(3).max(8);
+    (head.to_string(), Some(truncate_end(tail, rest)))
+}
+
 pub(crate) fn tab_dashboards(
     app: &AppState,
     ws: &crate::workspace::Workspace,
+    width: u16,
 ) -> Vec<TabDash> {
     ws.tabs
         .iter()
@@ -267,12 +301,16 @@ pub(crate) fn tab_dashboards(
                     })
                 })
                 .unwrap_or_else(|| "shell".to_string());
+            let (title, cont) = wrap_title(&title, width);
             let mut rows = vec![TabDashRow::Title {
                 text: title,
                 state,
                 seen,
                 since_ms,
             }];
+            if let Some(cont) = cont {
+                rows.push(TabDashRow::TitleCont(cont));
+            }
             if let Some(s) = toks.get("hdr").filter(|s| !s.is_empty()) {
                 rows.push(TabDashRow::Counts(s.clone()));
             }
@@ -308,13 +346,16 @@ fn workspace_row_height(
     ws_idx: usize,
     ws: &crate::workspace::Workspace,
     indented: bool,
+    width: u16,
 ) -> u16 {
-    let dashes = tab_dashboards(app, ws);
+    let dashes = tab_dashboards(app, ws, width);
     let tab_rows: usize = dashes.iter().map(|d| d.rows.len()).sum();
     let content = usize::from(workspace_name_row_visible(app, ws_idx, ws, indented))
         + tab_rows
         + dashes.len().saturating_sub(1);
-    (content.max(1).min((u16::MAX - 1) as usize) as u16).saturating_add(1)
+    // + a blank spacer under the bar above and the bar row itself, so text
+    // floats with even air on both sides of every separator (Josh 2026-08-26)
+    (content.max(1).min((u16::MAX - 2) as usize) as u16).saturating_add(2)
 }
 
 fn workspace_row_height_in_body(
@@ -322,9 +363,9 @@ fn workspace_row_height_in_body(
     ws_idx: usize,
     workspace: &crate::workspace::Workspace,
     indented: bool,
-    body_height: u16,
+    body: Rect,
 ) -> u16 {
-    workspace_row_height(app, ws_idx, workspace, indented).min(body_height)
+    workspace_row_height(app, ws_idx, workspace, indented, body.width).min(body.height)
 }
 
 fn workspace_entry_gap(
@@ -571,7 +612,7 @@ fn workspace_list_visible_count(app: &AppState, area: Rect, scroll: usize) -> us
                     continue;
                 };
                 (
-                    workspace_row_height_in_body(app, *ws_idx, ws, *indented, body.height),
+                    workspace_row_height_in_body(app, *ws_idx, ws, *indented, body),
                     workspace_entry_gap(app, &entries, entry_idx, *indented),
                 )
             }
@@ -597,7 +638,7 @@ fn workspace_list_bottom_start(app: &AppState, area: Rect) -> usize {
             continue;
         };
         let gap = workspace_entry_gap(app, &entries, entry_idx, *indented);
-        let needed = workspace_row_height_in_body(app, *ws_idx, workspace, *indented, body.height)
+        let needed = workspace_row_height_in_body(app, *ws_idx, workspace, *indented, body)
             .saturating_add(gap);
         if used_rows.saturating_add(needed) > body.height {
             break;
@@ -789,7 +830,7 @@ pub(crate) fn compute_workspace_list_areas(
                 let Some(ws) = app.workspaces.get(*ws_idx) else {
                     continue;
                 };
-                let row_height = workspace_row_height_in_body(app, *ws_idx, ws, *indented, body.height);
+                let row_height = workspace_row_height_in_body(app, *ws_idx, ws, *indented, body);
                 let gap = workspace_entry_gap(app, &entries, entry_idx, *indented);
                 if row_y.saturating_add(row_height) > body_bottom {
                     break;
@@ -802,9 +843,10 @@ pub(crate) fn compute_workspace_list_areas(
                 let content_bottom = row_y
                     .saturating_add(row_height.saturating_sub(1))
                     .min(body_bottom);
-                let mut tab_y =
-                    row_y + u16::from(workspace_name_row_visible(app, *ws_idx, ws, *indented));
-                for (i, dash) in tab_dashboards(app, ws).iter().enumerate() {
+                let mut tab_y = row_y
+                    + 1
+                    + u16::from(workspace_name_row_visible(app, *ws_idx, ws, *indented));
+                for (i, dash) in tab_dashboards(app, ws, body.width).iter().enumerate() {
                     if i > 0 {
                         tab_y = tab_y.saturating_add(1);
                     }
@@ -1286,10 +1328,11 @@ fn render_workspace_list(
         render_header_button(frame, app.global_launcher_rect(), "menu", menu_style, p);
     }
     if area.height >= WORKSPACE_SECTION_HEADER_ROWS {
+        // same bar as between spaces, so the top space is capped too
         let divider_y = area.y + WORKSPACE_SECTION_HEADER_ROWS - 1;
         let buf = frame.buffer_mut();
         for x in area.x..area.x + area.width {
-            buf[(x, divider_y)].set_symbol("─");
+            buf[(x, divider_y)].set_symbol("▂");
             buf[(x, divider_y)].set_style(Style::default().fg(p.text));
         }
     }
@@ -1353,7 +1396,7 @@ fn render_workspace_list(
             .flatten();
 
         let content_bottom = (row_y + content_height).min(list_bottom);
-        let mut y = row_y;
+        let mut y = row_y.saturating_add(1);
         if workspace_name_row_visible(app, i, ws, card.indented) && y < content_bottom {
             let mut spans = Vec::new();
             let prefix_width = if let Some((_, collapsed)) = parent_group.as_ref() {
@@ -1392,7 +1435,7 @@ fn render_workspace_list(
         let dashes = if collapsed_group {
             Vec::new()
         } else {
-            tab_dashboards(app, ws)
+            tab_dashboards(app, ws, card.rect.width)
         };
         'tabs: for (di, dash) in dashes.iter().enumerate() {
             if di > 0 {
@@ -1467,6 +1510,21 @@ fn render_workspace_list(
                         frame.render_widget(
                             Paragraph::new(Line::from(status_spans)),
                             Rect::new(status_x, y, status_width as u16, 1),
+                        );
+                    }
+                    TabDashRow::TitleCont(text) => {
+                        frame.render_widget(
+                            Paragraph::new(Line::from(vec![
+                                Span::raw(" "),
+                                Span::styled(
+                                    truncate_end(
+                                        text,
+                                        card.rect.width.saturating_sub(3) as usize,
+                                    ),
+                                    Style::default().fg(p.text),
+                                ),
+                            ])),
+                            Rect::new(card.rect.x, y, card.rect.width, 1),
                         );
                     }
                     TabDashRow::Counts(text) => {
@@ -1621,7 +1679,10 @@ mod tests {
         let buffer = terminal.backend().buffer();
 
         // manual space names render teal with no backdrop of their own; the
-        // active TAB block carries the highlight (Josh 2026-08-26)
+        // active TAB block carries the highlight (Josh 2026-08-26); each card
+        // opens with a blank spacer row under the bar above it
+        let first_row = first_row + 1;
+        let second_row = second_row + 1;
         let active = buffer[(find_symbol_x(buffer, first_row, 25, "o"), first_row)].style();
         assert_eq!(active.fg, Some(app.palette.teal));
         assert!(active.add_modifier.contains(Modifier::BOLD));
@@ -2243,7 +2304,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             spacious[3].rect.y,
             spacious[2].rect.y + spacious[2].rect.height + 2
         );
-        let spacious_metrics = workspace_list_scroll_metrics(&app, Rect::new(0, 0, 30, 14));
+        let spacious_metrics = workspace_list_scroll_metrics(&app, Rect::new(0, 0, 30, 16));
         assert_eq!(spacious_metrics.viewport_rows, 2);
         assert_eq!(spacious_metrics.max_offset_from_bottom, 2);
 
@@ -2252,7 +2313,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
         assert!(packed
             .windows(2)
             .all(|pair| pair[1].rect.y == pair[0].rect.y + pair[0].rect.height));
-        let packed_metrics = workspace_list_scroll_metrics(&app, Rect::new(0, 0, 30, 14));
+        let packed_metrics = workspace_list_scroll_metrics(&app, Rect::new(0, 0, 30, 16));
         assert_eq!(packed_metrics.viewport_rows, 3);
         assert_eq!(packed_metrics.max_offset_from_bottom, 1);
     }

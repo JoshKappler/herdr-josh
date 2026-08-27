@@ -1032,8 +1032,8 @@ mod tests {
         let buffer = terminal.backend().buffer();
 
         let card = app.view.workspace_card_areas[0].rect;
-        let line1 = buffer_row_text(buffer, card, card.y);
-        let line2 = buffer_row_text(buffer, card, card.y + 1);
+        let line1 = buffer_row_text(buffer, card, card.y + 1);
+        let line2 = buffer_row_text(buffer, card, card.y + 2);
 
         assert!(line1.starts_with(" one"), "name row: {line1:?}");
         assert!(!line1.contains("1 one"));

@@ -170,7 +170,8 @@ const METADATA_TTL_MIN_MS: u64 = 1;
 const MAX_METADATA_TOKEN_KEYS_PER_REQUEST: usize = 16;
 pub(super) const MAX_METADATA_TOKEN_KEYS_PER_RESOURCE: usize = 32;
 const MAX_METADATA_TOKEN_KEY_LEN: usize = 32;
-const MAX_METADATA_TOKEN_VALUE_LEN: usize = 80;
+// 160 fits a full tab prose line that wraps to two sidebar rows (Josh 2026-08-26)
+const MAX_METADATA_TOKEN_VALUE_LEN: usize = 160;
 
 pub(super) fn normalize_metadata_source(value: String) -> Result<String, &'static str> {
     let value = value.trim();
