@@ -348,13 +348,30 @@ fn draw_tab_line(
     let mut cx = x;
     let end = x.saturating_add(w);
     for (seg, style) in segs {
-        if cx >= end || seg.is_empty() {
+        if cx >= end {
             break;
+        }
+        if seg.is_empty() {
+            continue;
         }
         let shown = truncate_end(seg, (end - cx) as usize);
         buf.set_string(cx, y, &shown, style);
         cx += display_width(&shown) as u16;
     }
+}
+
+/// The phase clause leans toward the dot's color without adopting it fully:
+/// mostly-white ink with a tint (Josh 2026-08-26).
+fn phase_tint(state: AgentState, seen: bool, p: &Palette) -> Style {
+    use ratatui::style::Color;
+    let color = match (state, seen) {
+        (AgentState::Blocked, _) => Color::Rgb(0xe2, 0xae, 0xae),
+        (AgentState::Working, _) => Color::Rgb(0xe2, 0xd8, 0xa6),
+        (AgentState::Idle, false) => Color::Rgb(0xaa, 0xd4, 0xd4),
+        (AgentState::Idle, true) => Color::Rgb(0xb6, 0xd6, 0xb6),
+        (AgentState::Unknown, _) => return Style::default().fg(p.overlay1),
+    };
+    Style::default().fg(color)
 }
 
 fn line_tint_at(line: &WrappedLine, tint_start: Option<usize>) -> Option<usize> {
@@ -1557,7 +1574,7 @@ fn render_workspace_list(
             }
 
             let dot = state_dot(dash.state, dash.seen, p);
-            let phase_style = dot.1.add_modifier(Modifier::DIM);
+            let phase_style = phase_tint(dash.state, dash.seen, p);
             let base = Style::default().fg(p.text);
             let inner_x = bx + 2;
             let inner_w = bw.saturating_sub(4);
