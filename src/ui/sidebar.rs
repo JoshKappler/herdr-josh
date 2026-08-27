@@ -1489,11 +1489,21 @@ fn render_workspace_list(
                             .width
                             .saturating_sub(status_width as u16 + 3)
                             as usize;
+                        let shown = truncate_end(text, avail);
+                        let mut spans = vec![Span::raw(" ")];
+                        // "handle: prose" leads with a bold 2-4 word handle
+                        match shown.split_once(": ") {
+                            Some((head, rest)) if head.len() <= 28 => {
+                                spans.push(Span::styled(
+                                    format!("{head}:"),
+                                    title_style.add_modifier(Modifier::BOLD),
+                                ));
+                                spans.push(Span::styled(format!(" {rest}"), title_style));
+                            }
+                            _ => spans.push(Span::styled(shown, title_style)),
+                        }
                         frame.render_widget(
-                            Paragraph::new(Line::from(vec![
-                                Span::raw(" "),
-                                Span::styled(truncate_end(text, avail), title_style),
-                            ])),
+                            Paragraph::new(Line::from(spans)),
                             Rect::new(card.rect.x, y, card.rect.width, 1),
                         );
                         let mut status_spans = Vec::new();

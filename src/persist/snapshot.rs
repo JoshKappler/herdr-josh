@@ -107,6 +107,14 @@ pub struct PaneSnapshot {
     pub agent_session: Option<PaneAgentSessionSnapshot>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub launch_argv: Option<Vec<String>>,
+    /// False = agent finished and Josh has not viewed the pane yet; round-trips
+    /// through live handoffs so the done-unchecked dot survives a restart.
+    #[serde(default = "default_pane_seen")]
+    pub seen: bool,
+}
+
+fn default_pane_seen() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -368,6 +376,7 @@ fn capture_tab(
                 managed_agent_kind,
                 agent_session,
                 launch_argv,
+                seen: tab.panes.get(id).is_none_or(|pane| pane.seen),
             },
         );
     }
@@ -648,6 +657,7 @@ mod tests {
                 managed_agent_kind: None,
                 agent_session: None,
                 launch_argv: None,
+                seen: true,
             },
         );
         panes.insert(
@@ -659,6 +669,7 @@ mod tests {
                 managed_agent_kind: None,
                 agent_session: None,
                 launch_argv: None,
+                seen: true,
             },
         );
 
@@ -1201,6 +1212,7 @@ mod tests {
                 managed_agent_kind: None,
                 agent_session: None,
                 launch_argv: None,
+                seen: true,
             },
         );
         panes.insert(
@@ -1214,6 +1226,7 @@ mod tests {
                 managed_agent_kind: None,
                 agent_session: None,
                 launch_argv: None,
+                seen: true,
             },
         );
 
