@@ -10,7 +10,7 @@ use ratatui::{
 
 use self::tokens::{ResolvedToken, ResolvedTokenKind};
 use super::scrollbar::{render_scrollbar, should_show_scrollbar};
-use super::status::{agent_icon, state_dot, state_label};
+use super::status::{state_dot, state_label};
 use super::text::{display_width, display_width_u16, truncate_end};
 use crate::app::state::{AgentPanelSort, Palette};
 use crate::app::{AppState, Mode};
@@ -996,38 +996,59 @@ pub(crate) fn compute_workspace_card_areas(
     compute_workspace_list_areas(app, area).0
 }
 
-/// Auto-scale sidebar width based on workspace identity + agent summary.
-pub(crate) fn collapsed_sidebar_sections(area: Rect) -> (Rect, Option<u16>, Rect) {
-    let content = Rect::new(area.x, area.y, area.width.saturating_sub(1), area.height);
-    if content.width == 0 || content.height == 0 {
-        return (Rect::default(), None, Rect::default());
-    }
+const COLLAPSED_BOX_ROWS: u16 = 3;
 
-    if content.height < 7 {
-        return (content, None, Rect::default());
+pub(crate) fn collapsed_minimize_button_rect(area: Rect) -> Rect {
+    let content_w = area.width.saturating_sub(1);
+    if content_w < 5 || area.height < 3 {
+        return Rect::default();
     }
-
-    let total_h = content.height as usize;
-    let ws_h = total_h.div_ceil(2);
-    let detail_h = total_h.saturating_sub(ws_h + 1);
-    if ws_h == 0 || detail_h == 0 {
-        return (content, None, Rect::default());
-    }
-
-    let divider_y = content.y + ws_h as u16;
-    let ws_area = Rect::new(content.x, content.y, content.width, ws_h as u16);
-    let detail_area = Rect::new(content.x, divider_y + 1, content.width, detail_h as u16);
-    (ws_area, Some(divider_y), detail_area)
+    Rect::new(area.x, area.y, 5, 3)
 }
 
-/// Collapsed sidebar: workspace glance on top, compact agent list below.
+/// Minimized sidebar geometry: one 3-row dot box per tab, boxes touching
+/// within a space, the usual gap between spaces (Josh 2026-08-26).
+pub(crate) fn collapsed_tab_boxes(
+    app: &AppState,
+    area: Rect,
+) -> Vec<crate::app::state::SidebarTabRow> {
+    let content_w = area.width.saturating_sub(1);
+    if content_w < 6 || area.height <= WORKSPACE_SECTION_HEADER_ROWS {
+        return Vec::new();
+    }
+    let mut y = area.y + WORKSPACE_SECTION_HEADER_ROWS;
+    let bottom = area.y + area.height;
+    let mut boxes = Vec::new();
+    let entries = workspace_list_entries(app);
+    for (entry_idx, entry) in entries.iter().enumerate() {
+        let WorkspaceListEntry::Workspace { ws_idx, indented } = entry;
+        let Some(ws) = app.workspaces.get(*ws_idx) else {
+            continue;
+        };
+        for (tab_idx, _) in ws.tabs.iter().enumerate() {
+            if y.saturating_add(COLLAPSED_BOX_ROWS) > bottom {
+                return boxes;
+            }
+            boxes.push(crate::app::state::SidebarTabRow {
+                ws_idx: *ws_idx,
+                tab_idx,
+                rect: Rect::new(area.x, y, content_w, COLLAPSED_BOX_ROWS),
+            });
+            y += COLLAPSED_BOX_ROWS;
+        }
+        y = y
+            .saturating_add(workspace_entry_gap(app, &entries, entry_idx, *indented))
+            .min(bottom);
+    }
+    boxes
+}
+
 pub(super) fn render_sidebar_collapsed(app: &AppState, frame: &mut Frame, area: Rect) {
     if area.width == 0 || area.height == 0 {
         return;
     }
 
     let is_navigating = matches!(app.mode, Mode::Navigate);
-
     let p = &app.palette;
     let sep_style = Style::default().fg(p.text);
     let sep_x = area.x + area.width.saturating_sub(1);
@@ -1037,85 +1058,70 @@ pub(super) fn render_sidebar_collapsed(app: &AppState, frame: &mut Frame, area: 
         buf[(sep_x, y)].set_style(sep_style);
     }
 
-    let (ws_area, divider_y, detail_area) = collapsed_sidebar_sections(area);
-    if ws_area == Rect::default() {
-        render_sidebar_toggle(app, frame, area, true, p);
-        return;
+    let button = collapsed_minimize_button_rect(area);
+    if button != Rect::default() {
+        let plain = Style::default().fg(p.text).add_modifier(Modifier::BOLD);
+        render_header_button(frame, button, "◧", plain, p);
     }
 
-    for (visible_idx, ws) in app.workspaces.iter().enumerate() {
-        let y = ws_area.y + visible_idx as u16;
-        if y >= ws_area.y + ws_area.height {
+    for tab_box in collapsed_tab_boxes(app, area) {
+        let Some(ws) = app.workspaces.get(tab_box.ws_idx) else {
+            continue;
+        };
+        let Some(tab) = ws.tabs.get(tab_box.tab_idx) else {
+            continue;
+        };
+        let (state, seen, _) = tab_attention(app, tab);
+        let selected = tab_box.ws_idx == app.selected && is_navigating;
+        let tab_is_active =
+            Some(tab_box.ws_idx) == app.active && tab_box.tab_idx == ws.active_tab;
+        let rect = tab_box.rect;
+        let bx = rect.x + 1;
+        let bw = rect.width.saturating_sub(1);
+        if bw < 5 {
             break;
         }
-        let (agg_state, agg_seen) = ws.aggregate_state(&app.terminals);
-        let (icon, icon_style) = state_dot(agg_state, agg_seen, p);
-        let is_selected = visible_idx == app.selected && is_navigating;
-        let is_active = Some(visible_idx) == app.active;
-        let row_style = if is_selected {
-            Style::default().bg(p.surface0)
-        } else if is_active {
-            Style::default().bg(p.surface_dim)
-        } else {
-            Style::default()
-        };
-        let num_style = if is_selected {
-            Style::default().fg(p.overlay1).bg(p.surface0)
-        } else if is_active {
-            Style::default().fg(p.text).bg(p.surface_dim)
-        } else {
-            Style::default().fg(p.overlay0)
-        };
-
-        if is_selected || is_active {
-            let buf = frame.buffer_mut();
-            for x in ws_area.x..ws_area.x + ws_area.width {
-                buf[(x, y)].set_style(row_style);
-            }
-        }
-
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                Span::styled(format!("{}", visible_idx + 1), num_style),
-                Span::styled(" ", row_style),
-                Span::styled(icon, icon_style),
-            ])),
-            Rect::new(ws_area.x, y, ws_area.width, 1),
-        );
-    }
-
-    if let Some(divider_y) = divider_y {
         let buf = frame.buffer_mut();
-        let divider_color = p.text;
-        for x in ws_area.x..ws_area.x + ws_area.width {
-            buf[(x, divider_y)].set_symbol("─");
-            buf[(x, divider_y)].set_style(Style::default().fg(divider_color));
-        }
-    }
-
-    let detail_content_area = Rect::new(
-        detail_area.x,
-        detail_area.y,
-        detail_area.width,
-        detail_area.height.saturating_sub(1),
-    );
-    if detail_content_area != Rect::default() {
-        for (detail_idx, detail) in agent_panel_entries(app).iter().enumerate() {
-            let y = detail_content_area.y + detail_idx as u16;
-            if y >= detail_content_area.y + detail_content_area.height {
-                break;
+        let box_bg = if selected {
+            Some(p.surface0)
+        } else if tab_is_active {
+            Some(p.surface_dim)
+        } else {
+            None
+        };
+        if let Some(bg) = box_bg {
+            for by in rect.y..rect.y + rect.height {
+                for x in bx..bx + bw {
+                    buf[(x, by)].set_style(Style::default().bg(bg));
+                }
             }
-            let position = detail_idx + 1;
-            let position_style = Style::default().fg(p.overlay0);
-            let (icon, icon_style) = agent_icon(detail.state, detail.seen, app.spinner_tick, p);
-            frame.render_widget(
-                Paragraph::new(Line::from(vec![
-                    Span::styled(format!("{position:<2}"), position_style),
-                    Span::styled(icon, icon_style),
-                ])),
-                Rect::new(detail_content_area.x, y, detail_content_area.width, 1),
-            );
         }
+        let border = Style::default().fg(p.overlay0);
+        let top = rect.y;
+        let bottom = rect.y + rect.height - 1;
+        for x in bx..bx + bw {
+            buf[(x, top)].set_symbol("─");
+            buf[(x, top)].set_style(border);
+            buf[(x, bottom)].set_symbol("─");
+            buf[(x, bottom)].set_style(border);
+        }
+        buf[(bx, top)].set_symbol("┌");
+        buf[(bx + bw - 1, top)].set_symbol("┐");
+        buf[(bx, bottom)].set_symbol("└");
+        buf[(bx + bw - 1, bottom)].set_symbol("┘");
+        for by in top + 1..bottom {
+            buf[(bx, by)].set_symbol("│");
+            buf[(bx, by)].set_style(border);
+            buf[(bx + bw - 1, by)].set_symbol("│");
+            buf[(bx + bw - 1, by)].set_style(border);
+        }
+        let rail = Style::default().fg(space_rail_color(ws, p));
+        for by in rect.y..rect.y + rect.height {
+            buf[(rect.x, by)].set_symbol("▌");
+            buf[(rect.x, by)].set_style(rail);
+        }
+        let (icon, icon_style) = state_dot(state, seen, p);
+        buf.set_string(bx + 2, top + 1, icon, icon_style);
     }
 
     render_sidebar_toggle(app, frame, area, true, p);
@@ -1422,6 +1428,7 @@ fn render_workspace_list(
     let list_bottom = area.y + area.height;
     if area.height >= 3 {
         let plain = Style::default().fg(p.text).add_modifier(Modifier::BOLD);
+        render_header_button(frame, app.sidebar_minimize_button_rect(), "◧", plain, p);
         render_header_button(frame, app.sidebar_new_tab_button_rect(), "new tab", plain, p);
         render_header_button(frame, app.sidebar_new_button_rect(), "new space", plain, p);
         let menu_style = if app.global_menu_attention_badge_visible() {
@@ -1454,27 +1461,6 @@ fn render_workspace_list(
                 ..
             }) if *target == i && *source_ws_idx != i
         );
-        // the active-tab block gets its own backdrop below; the whole card
-        // lights up only for keyboard selection and drags (Josh 2026-08-26)
-        let highlighted = selected || is_dragged || is_drop_target;
-
-        if highlighted {
-            let bg = if selected {
-                p.surface0
-            } else {
-                p.surface1
-            };
-            let buf = frame.buffer_mut();
-            for y in row_y..row_y + content_height {
-                if y >= list_bottom {
-                    break;
-                }
-                for x in card.rect.x..card.rect.x + card.rect.width {
-                    buf[(x, y)].set_style(Style::default().bg(bg));
-                }
-            }
-        }
-
         let name_style = if selected || is_active || is_dragged {
             Style::default().fg(p.text).add_modifier(Modifier::BOLD)
         } else {
@@ -1542,10 +1528,20 @@ fn render_workspace_list(
                 break;
             }
             let tab_is_active = is_active && dash.tab_idx == ws.active_tab;
-            if tab_is_active && !highlighted {
+            // highlights stay inside the box borders (Josh 2026-08-26)
+            let box_bg = if selected {
+                Some(p.surface0)
+            } else if is_dragged || is_drop_target {
+                Some(p.surface1)
+            } else if tab_is_active {
+                Some(p.surface_dim)
+            } else {
+                None
+            };
+            if let Some(bg) = box_bg {
                 for by in y..y + box_h {
                     for x in bx..bx + bw {
-                        buf[(x, by)].set_style(Style::default().bg(p.surface_dim));
+                        buf[(x, by)].set_style(Style::default().bg(bg));
                     }
                 }
             }
@@ -2030,111 +2026,65 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
     }
 
     #[test]
-    fn collapsed_sidebar_numbers_grouped_agents_by_list_position() {
+    fn collapsed_sidebar_draws_a_dot_box_per_tab() {
         let mut app = crate::app::state::AppState::test_new();
         app.workspaces = vec![Workspace::test_new("one"), Workspace::test_new("two")];
         app.ensure_test_terminals();
+        app.sidebar_spaces.row_gap = 1;
 
-        for ws_idx in 0..app.workspaces.len() {
-            let pane = app.workspaces[ws_idx].tabs[0].root_pane;
-            let terminal_id = app.workspaces[ws_idx].tabs[0].panes[&pane]
-                .attached_terminal_id
-                .clone();
-            app.terminals.get_mut(&terminal_id).unwrap().detected_agent = Some(Agent::Claude);
-        }
+        let pane = app.workspaces[0].tabs[0].root_pane;
+        let terminal_id = app.workspaces[0].tabs[0].panes[&pane]
+            .attached_terminal_id
+            .clone();
+        let term = app.terminals.get_mut(&terminal_id).unwrap();
+        term.detected_agent = Some(Agent::Claude);
+        term.state = AgentState::Working;
 
-        let area = Rect::new(0, 0, 4, 12);
-        let (_, _, detail_area) = collapsed_sidebar_sections(area);
+        let area = Rect::new(0, 0, 7, 20);
+        let boxes = collapsed_tab_boxes(&app, area);
+        assert_eq!(boxes.len(), 2);
+        assert_eq!(boxes[0].rect, Rect::new(0, 4, 6, 3));
+        assert_eq!(boxes[1].rect.y, 8);
+
         let mut terminal = Terminal::new(TestBackend::new(area.width, area.height))
             .expect("test terminal should initialize");
-
         terminal
             .draw(|frame| render_sidebar_collapsed(&app, frame, area))
             .expect("collapsed sidebar should render");
 
         let buffer = terminal.backend().buffer();
-        assert_eq!(buffer[(detail_area.x, detail_area.y)].symbol(), "1");
-        assert_eq!(buffer[(detail_area.x, detail_area.y + 1)].symbol(), "2");
+        assert_eq!(buffer[(2, 1)].symbol(), "◧");
+        assert_eq!(buffer[(0, 4)].symbol(), "▌");
+        assert_eq!(buffer[(1, 4)].symbol(), "┌");
+        assert_eq!(buffer[(5, 6)].symbol(), "┘");
+        assert_eq!(buffer[(3, 5)].symbol(), "●");
     }
 
     #[test]
-    fn collapsed_sidebar_keeps_status_visible_for_two_digit_positions() {
+    fn collapsed_sidebar_active_tab_box_gets_backdrop() {
         let mut app = crate::app::state::AppState::test_new();
-        app.workspaces = (1..=10)
-            .map(|idx| Workspace::test_new(&format!("workspace-{idx}")))
-            .collect();
+        app.workspaces = vec![Workspace::test_new("one"), Workspace::test_new("two")];
         app.ensure_test_terminals();
+        app.active = Some(1);
+        app.selected = 0;
+        app.mode = Mode::Terminal;
 
-        for ws_idx in 0..app.workspaces.len() {
-            let pane = app.workspaces[ws_idx].tabs[0].root_pane;
-            let terminal_id = app.workspaces[ws_idx].tabs[0].panes[&pane]
-                .attached_terminal_id
-                .clone();
-            app.terminals.get_mut(&terminal_id).unwrap().detected_agent = Some(Agent::Claude);
-        }
+        let area = Rect::new(0, 0, 7, 20);
+        let boxes = collapsed_tab_boxes(&app, area);
+        let active_box = boxes.iter().find(|b| b.ws_idx == 1).unwrap().rect;
+        let idle_box = boxes.iter().find(|b| b.ws_idx == 0).unwrap().rect;
 
-        let area = Rect::new(0, 0, 4, 25);
-        let (_, _, detail_area) = collapsed_sidebar_sections(area);
         let mut terminal = Terminal::new(TestBackend::new(area.width, area.height))
             .expect("test terminal should initialize");
-
-        terminal
-            .draw(|frame| render_sidebar_collapsed(&app, frame, area))
-            .expect("collapsed sidebar should render");
-
-        let tenth_row = detail_area.y + 9;
-        let buffer = terminal.backend().buffer();
-        assert_eq!(buffer[(detail_area.x, tenth_row)].symbol(), "1");
-        assert_eq!(buffer[(detail_area.x + 1, tenth_row)].symbol(), "0");
-        assert_eq!(buffer[(detail_area.x + 2, tenth_row)].symbol(), "○");
-    }
-
-    #[test]
-    fn collapsed_sidebar_numbers_priority_agents_by_list_position() {
-        let first = Workspace::test_new("one");
-        let first_pane = first.tabs[0].root_pane;
-        let mut second = Workspace::test_new("two");
-        let second_pane = second.tabs[0].root_pane;
-        let urgent_pane = second.test_split(ratatui::layout::Direction::Horizontal);
-
-        let mut app = crate::app::state::AppState::test_new();
-        app.workspaces = vec![first, second];
-        app.ensure_test_terminals();
-        app.agent_panel_sort = crate::app::state::AgentPanelSort::Priority;
-
-        let set_state = |app: &mut crate::app::state::AppState, ws_idx: usize, pane_id, state| {
-            let terminal_id = app.workspaces[ws_idx].tabs[0].panes[&pane_id]
-                .attached_terminal_id
-                .clone();
-            let terminal = app.terminals.get_mut(&terminal_id).unwrap();
-            terminal.detected_agent = Some(Agent::Claude);
-            terminal.state = state;
-        };
-        set_state(&mut app, 0, first_pane, AgentState::Working);
-        set_state(&mut app, 1, second_pane, AgentState::Working);
-        set_state(&mut app, 1, urgent_pane, AgentState::Blocked);
-
-        assert_eq!(app.workspaces[1].public_pane_number(urgent_pane), Some(2));
-        assert_eq!(agent_panel_entries(&app)[0].pane_id, urgent_pane);
-
-        let area = Rect::new(0, 0, 4, 16);
-        let (_, _, detail_area) = collapsed_sidebar_sections(area);
-        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height))
-            .expect("test terminal should initialize");
-
         terminal
             .draw(|frame| render_sidebar_collapsed(&app, frame, area))
             .expect("collapsed sidebar should render");
 
         let buffer = terminal.backend().buffer();
-        assert_eq!(buffer[(detail_area.x, detail_area.y)].symbol(), "1");
-        assert_eq!(buffer[(detail_area.x, detail_area.y + 1)].symbol(), "2");
-        assert_eq!(buffer[(detail_area.x, detail_area.y + 2)].symbol(), "3");
-        assert_eq!(buffer[(detail_area.x + 2, detail_area.y)].symbol(), "◉");
-        assert_eq!(
-            buffer[(detail_area.x + 2, detail_area.y)].style().fg,
-            Some(app.palette.red)
-        );
+        let active = buffer[(active_box.x + 2, active_box.y + 1)].style();
+        assert_eq!(active.bg, Some(app.palette.surface_dim));
+        let idle = buffer[(idle_box.x + 2, idle_box.y + 1)].style();
+        assert_ne!(idle.bg, Some(app.palette.surface_dim));
     }
 
     #[cfg(unix)]

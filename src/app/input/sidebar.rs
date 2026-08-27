@@ -169,40 +169,44 @@ impl AppState {
         Rect::new(ws_area.x, y, ws_area.width, 1)
     }
 
-    // Header buttons, right to left: ◫ (right panel), menu, new space, new tab.
-    pub(crate) fn sidebar_panel_toggle_rect(&self) -> Rect {
+    // Header buttons, left to right: ◧ (minimize), new tab, new space, menu,
+    // ◫ (right panel), evenly justified across the column (Josh 2026-08-26).
+    fn sidebar_header_button_rect(&self, idx: usize) -> Rect {
+        const WIDTHS: [u16; 5] = [5, 11, 13, 8, 5];
         let area = self.workspace_list_rect();
         if area == Rect::default() {
             return Rect::default();
         }
-        let width = 5u16.min(area.width.max(1));
-        let x = area.x + area.width.saturating_sub(width);
+        let total: u16 = WIDTHS.iter().sum();
+        let leftover = area.width.saturating_sub(total);
+        let lead: u16 = WIDTHS[..idx].iter().sum();
+        let gap = (u32::from(leftover) * idx as u32 / (WIDTHS.len() as u32 - 1)) as u16;
+        let x = (area.x + lead + gap).min(area.x + area.width.saturating_sub(1));
+        let width = WIDTHS[idx].min((area.x + area.width).saturating_sub(x));
         Rect::new(x, area.y, width, 3u16.min(area.height))
     }
 
-    fn header_button_left_of(&self, right: Rect, label_width: u16) -> Rect {
-        let area = self.workspace_list_rect();
-        if area == Rect::default() || right == Rect::default() {
-            return Rect::default();
-        }
-        let width = (label_width + 2).min(area.width);
-        let x = right.x.saturating_sub(width.saturating_add(1)).max(area.x);
-        Rect::new(x, area.y, width, 3u16.min(area.height))
+    pub(crate) fn sidebar_minimize_button_rect(&self) -> Rect {
+        self.sidebar_header_button_rect(0)
+    }
+
+    pub(crate) fn sidebar_new_tab_button_rect(&self) -> Rect {
+        self.sidebar_header_button_rect(1)
+    }
+
+    pub(crate) fn sidebar_new_button_rect(&self) -> Rect {
+        self.sidebar_header_button_rect(2)
     }
 
     pub(crate) fn global_launcher_rect(&self) -> Rect {
         if self.view.layout == ViewLayout::Mobile {
             return self.view.mobile_menu_hit_area;
         }
-        self.header_button_left_of(self.sidebar_panel_toggle_rect(), 6)
+        self.sidebar_header_button_rect(3)
     }
 
-    pub(crate) fn sidebar_new_button_rect(&self) -> Rect {
-        self.header_button_left_of(self.global_launcher_rect(), 11)
-    }
-
-    pub(crate) fn sidebar_new_tab_button_rect(&self) -> Rect {
-        self.header_button_left_of(self.sidebar_new_button_rect(), 9)
+    pub(crate) fn sidebar_panel_toggle_rect(&self) -> Rect {
+        self.sidebar_header_button_rect(4)
     }
 
     pub(crate) fn global_menu_labels(&self) -> Vec<&'static str> {
@@ -366,46 +370,23 @@ impl AppState {
         Some(boxes.last()?.tab_idx + 1)
     }
 
-    pub(super) fn collapsed_workspace_at_row(&self, row: u16) -> Option<usize> {
-        if !self.sidebar_collapsed {
-            return None;
-        }
-
-        let (ws_area, _, _) = crate::ui::collapsed_sidebar_sections(self.view.sidebar_rect);
-        if ws_area == Rect::default() || row < ws_area.y || row >= ws_area.y + ws_area.height {
-            return None;
-        }
-
-        let idx = (row - ws_area.y) as usize;
-        (idx < self.workspaces.len()).then_some(idx)
+    pub(super) fn collapsed_minimize_button_rect(&self) -> Rect {
+        crate::ui::collapsed_minimize_button_rect(self.view.sidebar_rect)
     }
 
-    pub(super) fn collapsed_agent_detail_target_at(
-        &self,
-        row: u16,
-    ) -> Option<(usize, usize, crate::layout::PaneId)> {
+    pub(super) fn collapsed_tab_box_at(&self, col: u16, row: u16) -> Option<(usize, usize)> {
         if !self.sidebar_collapsed {
             return None;
         }
-
-        let (_, _, detail_area) = crate::ui::collapsed_sidebar_sections(self.view.sidebar_rect);
-        let detail_content_area = Rect::new(
-            detail_area.x,
-            detail_area.y,
-            detail_area.width,
-            detail_area.height.saturating_sub(1),
-        );
-        if detail_content_area == Rect::default()
-            || row < detail_content_area.y
-            || row >= detail_content_area.y + detail_content_area.height
-        {
-            return None;
-        }
-
-        let detail_idx = (row - detail_content_area.y) as usize;
-        let details = crate::ui::agent_panel_entries(self);
-        let detail = details.get(detail_idx)?;
-        Some((detail.ws_idx, detail.tab_idx, detail.pane_id))
+        crate::ui::collapsed_tab_boxes(self, self.view.sidebar_rect)
+            .iter()
+            .find(|b| {
+                col >= b.rect.x
+                    && col < b.rect.x + b.rect.width
+                    && row >= b.rect.y
+                    && row < b.rect.y + b.rect.height
+            })
+            .map(|b| (b.ws_idx, b.tab_idx))
     }
 
     pub(super) fn workspace_drop_index_at_row(&self, row: u16) -> Option<usize> {
@@ -721,7 +702,7 @@ mod tests {
     }
 
     #[test]
-    fn clicking_collapsed_agent_row_switches_to_correct_tab_and_pane() {
+    fn clicking_collapsed_tab_box_switches_to_correct_tab_and_pane() {
         let mut app = app_for_mouse_test();
         let mut ws = Workspace::test_new("test");
         let first_pane = ws.tabs[0].root_pane;
@@ -749,15 +730,15 @@ mod tests {
         app.state.selected = 0;
         app.state.mode = Mode::Terminal;
         app.state.sidebar_collapsed = true;
-        app.state.view.sidebar_rect = Rect::new(0, 0, 4, 20);
-        app.state.view.terminal_area = Rect::new(4, 0, 80, 20);
+        app.state.view.sidebar_rect = Rect::new(0, 0, 7, 20);
+        app.state.view.terminal_area = Rect::new(7, 0, 80, 20);
 
-        let (_, _, detail_area) =
-            crate::ui::collapsed_sidebar_sections(app.state.view.sidebar_rect);
+        let boxes = crate::ui::collapsed_tab_boxes(&app.state, app.state.view.sidebar_rect);
+        let target = boxes.iter().find(|b| b.tab_idx == 1).unwrap().rect;
         app.handle_mouse(mouse(
             MouseEventKind::Down(MouseButton::Left),
-            detail_area.x,
-            detail_area.y + 1,
+            target.x + 2,
+            target.y + 1,
         ));
 
         assert_eq!(app.state.workspaces[0].active_tab, 1);
@@ -769,7 +750,7 @@ mod tests {
     }
 
     #[test]
-    fn clicking_collapsed_priority_agent_row_switches_to_matching_workspace() {
+    fn clicking_collapsed_tab_box_switches_to_matching_workspace() {
         let mut app = app_for_mouse_test();
         let first = Workspace::test_new("one");
         let first_pane = first.tabs[0].root_pane;
@@ -782,9 +763,8 @@ mod tests {
         app.state.selected = 0;
         app.state.mode = Mode::Terminal;
         app.state.sidebar_collapsed = true;
-        app.state.agent_panel_sort = AgentPanelSort::Priority;
-        app.state.view.sidebar_rect = Rect::new(0, 0, 4, 20);
-        app.state.view.terminal_area = Rect::new(4, 0, 80, 20);
+        app.state.view.sidebar_rect = Rect::new(0, 0, 7, 20);
+        app.state.view.terminal_area = Rect::new(7, 0, 80, 20);
 
         let set_state = |app: &mut crate::app::App, ws_idx: usize, pane_id, state| {
             let terminal_id = app.state.workspaces[ws_idx].tabs[0].panes[&pane_id]
@@ -797,12 +777,12 @@ mod tests {
         set_state(&mut app, 0, first_pane, AgentState::Working);
         set_state(&mut app, 1, second_pane, AgentState::Blocked);
 
-        let (_, _, detail_area) =
-            crate::ui::collapsed_sidebar_sections(app.state.view.sidebar_rect);
+        let boxes = crate::ui::collapsed_tab_boxes(&app.state, app.state.view.sidebar_rect);
+        let target = boxes.iter().find(|b| b.ws_idx == 1).unwrap().rect;
         app.handle_mouse(mouse(
             MouseEventKind::Down(MouseButton::Left),
-            detail_area.x,
-            detail_area.y,
+            target.x + 2,
+            target.y + 1,
         ));
 
         assert_eq!(app.state.active, Some(1));
@@ -859,6 +839,40 @@ mod tests {
 
         assert!(app.state.sidebar_collapsed);
         assert!(app.state.drag.is_none());
+    }
+
+    #[test]
+    fn clicking_minimize_button_collapses_sidebar() {
+        let mut app = app_for_mouse_test();
+        app.state.sidebar_collapsed = false;
+        app.state.view.sidebar_rect = Rect::new(0, 0, 57, 40);
+        app.state.view.terminal_area = Rect::new(57, 0, 80, 40);
+
+        let rect = app.state.sidebar_minimize_button_rect();
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            rect.x + 2,
+            rect.y + 1,
+        ));
+
+        assert!(app.state.sidebar_collapsed);
+    }
+
+    #[test]
+    fn clicking_collapsed_minimize_button_expands_sidebar() {
+        let mut app = app_for_mouse_test();
+        app.state.sidebar_collapsed = true;
+        app.state.view.sidebar_rect = Rect::new(0, 0, 7, 40);
+        app.state.view.terminal_area = Rect::new(7, 0, 80, 40);
+
+        let rect = app.state.collapsed_minimize_button_rect();
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            rect.x + 2,
+            rect.y + 1,
+        ));
+
+        assert!(!app.state.sidebar_collapsed);
     }
 
     #[test]

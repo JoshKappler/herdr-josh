@@ -529,27 +529,31 @@ impl AppState {
                         return None;
                     }
 
-                    if self.sidebar_collapsed {
-                        if let Some(idx) = self.collapsed_workspace_at_row(mouse.row) {
-                            self.mode = Mode::Terminal;
-                            return Some(MouseAction::FocusWorkspace { ws_idx: idx });
-                        }
-
-                        if let Some((ws_idx, _tab_idx, pane_id)) =
-                            self.collapsed_agent_detail_target_at(mouse.row)
-                        {
-                            self.mode = Mode::Terminal;
-                            return Some(MouseAction::FocusPane { ws_idx, pane_id });
-                        }
-                        return None;
-                    }
-
                     let hit = |rect: Rect| {
                         mouse.row >= rect.y
                             && mouse.row < rect.y + rect.height
                             && mouse.column >= rect.x
                             && mouse.column < rect.x + rect.width
                     };
+
+                    if self.sidebar_collapsed {
+                        if hit(self.collapsed_minimize_button_rect()) {
+                            self.sidebar_collapsed = false;
+                            return None;
+                        }
+                        if let Some((ws_idx, tab_idx)) =
+                            self.collapsed_tab_box_at(mouse.column, mouse.row)
+                        {
+                            self.mode = Mode::Terminal;
+                            return Some(MouseAction::FocusSpaceTab { ws_idx, tab_idx });
+                        }
+                        return None;
+                    }
+
+                    if hit(self.sidebar_minimize_button_rect()) {
+                        self.sidebar_collapsed = true;
+                        return None;
+                    }
                     if hit(self.sidebar_new_button_rect()) {
                         return Some(MouseAction::NewWorkspace);
                     }
