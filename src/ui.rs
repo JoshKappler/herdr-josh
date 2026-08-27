@@ -1032,12 +1032,13 @@ mod tests {
         let buffer = terminal.backend().buffer();
 
         let card = app.view.workspace_card_areas[0].rect;
-        let line1 = buffer_row_text(buffer, card, card.y + 1);
-        let line2 = buffer_row_text(buffer, card, card.y + 2);
+        let line1 = buffer_row_text(buffer, card, card.y);
+        let line2 = buffer_row_text(buffer, card, card.y + 1);
 
-        assert!(line1.starts_with(" one"), "name row: {line1:?}");
-        assert!(!line1.contains("1 one"));
-        assert!(line2.starts_with(" shell"), "tab row: {line2:?}");
+        // spaces no longer render titles; the tab box carries the content
+        assert!(line1.starts_with("▌┌"), "box top: {line1:?}");
+        assert!(!line2.contains("1 one"));
+        assert!(line2.contains("shell"), "tab row: {line2:?}");
 
         std::fs::remove_dir_all(repo).ok();
     }

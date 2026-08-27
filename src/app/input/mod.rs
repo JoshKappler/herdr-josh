@@ -314,7 +314,40 @@ impl App {
             if let Some(action) = self.state.handle_mouse(&mut self.terminal_runtimes, mouse) {
                 match action {
                     MouseAction::NewWorkspace => {
+                        // the new space lands right under the selected tab's space
+                        self.state.pending_workspace_insert_after = Some(self.state.selected);
                         self.begin_tui_workspace_create("tui.mouse.workspace.create")
+                    }
+                    MouseAction::NewTabInSelected => {
+                        let ws_idx = self.state.selected.min(
+                            self.state.workspaces.len().saturating_sub(1),
+                        );
+                        let workspace_id = self
+                            .state
+                            .workspaces
+                            .get(ws_idx)
+                            .map(|ws| ws.id.clone());
+                        self.runtime_tab_create(
+                            "tui.mouse.tab.create",
+                            crate::api::schema::TabCreateParams {
+                                workspace_id,
+                                cwd: None,
+                                focus: true,
+                                label: None,
+                                env: Default::default(),
+                            },
+                        );
+                    }
+                    MouseAction::ToggleRightPanel => {
+                        // the shelved right panel is a Hammerspoon webview;
+                        // caps+W's function toggles it
+                        let _ = std::process::Command::new(
+                            "/Users/joshuakappler/.local/bin/hs",
+                        )
+                        .args(["-c", "capsChordWorkers()"])
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .spawn();
                     }
                     MouseAction::Settings(action) => match action {
                         SettingsAction::SaveTheme(name) => self.save_theme(&name),

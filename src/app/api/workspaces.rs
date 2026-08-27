@@ -52,7 +52,13 @@ impl App {
             Err((code, message)) => return encode_error(id, &code, message),
         };
         match self.create_workspace_with_launch_env(cwd, params.focus, extra_env) {
-            Ok(index) => {
+            Ok(mut index) => {
+                if let Some(after) = self.state.pending_workspace_insert_after.take() {
+                    let insert = (after + 1).min(self.state.workspaces.len());
+                    if insert < index && self.state.move_workspace(index, insert) {
+                        index = insert;
+                    }
+                }
                 if let Some(label) = params.label {
                     if let Some(workspace) = self.state.workspaces.get_mut(index) {
                         workspace.set_custom_name(label);

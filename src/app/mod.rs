@@ -585,6 +585,7 @@ impl App {
             workspace_press: None,
             tab_press: None,
             sidebar_tab_press: None,
+            pending_workspace_insert_after: None,
             selection: None,
             selection_autoscroll: None,
             context_menu: None,

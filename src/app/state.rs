@@ -1484,6 +1484,8 @@ pub struct AppState {
     pub(crate) workspace_press: Option<WorkspacePressState>,
     pub(crate) tab_press: Option<TabPressState>,
     pub(crate) sidebar_tab_press: Option<SidebarTabPressState>,
+    /// One-shot: place the next created workspace right after this index.
+    pub(crate) pending_workspace_insert_after: Option<usize>,
     pub selection: Option<Selection>,
     pub selection_autoscroll: Option<SelectionAutoscroll>,
     pub context_menu: Option<ContextMenuState>,
@@ -1871,6 +1873,7 @@ impl AppState {
             workspace_press: None,
             tab_press: None,
             sidebar_tab_press: None,
+            pending_workspace_insert_after: None,
             selection: None,
             selection_autoscroll: None,
             context_menu: None,

@@ -10,6 +10,10 @@ use std::time::{Duration, Instant};
 use crate::detect::{Agent, AgentState};
 use crate::terminal::TerminalId;
 
+/// How long a Working hook report may sit unrefreshed while the screen reads
+/// idle before it is treated as a lost completion event.
+const STALE_WORKING_HOOK_GRACE: Duration = Duration::from_secs(90);
+
 #[path = "metadata.rs"]
 mod metadata;
 pub use metadata::{AgentMetadata, AgentMetadataReport, EffectivePresentation};
@@ -282,6 +286,22 @@ impl TerminalState {
                 == agent
             {
                 self.detected_agent = agent;
+            }
+            // A lost completion event otherwise pins Working forever: when the
+            // screen has read idle for a while and the hook has gone quiet,
+            // demote the stale authority in place (Josh 2026-08-26).
+            if fallback_state == AgentState::Idle
+                && !process_exited
+                && self.hook_authority.as_ref().is_some_and(|authority| {
+                    authority.state == AgentState::Working
+                        && now.saturating_duration_since(authority.reported_at)
+                            > STALE_WORKING_HOOK_GRACE
+                })
+            {
+                if let Some(authority) = self.hook_authority.as_mut() {
+                    authority.state = AgentState::Idle;
+                    authority.reported_at = now;
+                }
             }
             return TerminalStateMutation {
                 effective_state_change: self.recompute_effective_state(

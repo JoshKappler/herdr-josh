@@ -169,15 +169,24 @@ impl AppState {
         Rect::new(ws_area.x, y, ws_area.width, 1)
     }
 
-    pub(crate) fn sidebar_new_button_rect(&self) -> Rect {
+    // Header buttons, right to left: ◫ (right panel), menu, new space, new tab.
+    pub(crate) fn sidebar_panel_toggle_rect(&self) -> Rect {
         let area = self.workspace_list_rect();
         if area == Rect::default() {
             return Rect::default();
         }
-        let menu_width = 8u16.min(area.width);
-        let width = 7u16.min(area.width.saturating_sub(menu_width));
-        let menu_x = area.x + area.width.saturating_sub(menu_width);
-        let x = menu_x.saturating_sub(width.saturating_add(1)).max(area.x);
+        let width = 5u16.min(area.width.max(1));
+        let x = area.x + area.width.saturating_sub(width);
+        Rect::new(x, area.y, width, 3u16.min(area.height))
+    }
+
+    fn header_button_left_of(&self, right: Rect, label_width: u16) -> Rect {
+        let area = self.workspace_list_rect();
+        if area == Rect::default() || right == Rect::default() {
+            return Rect::default();
+        }
+        let width = (label_width + 2).min(area.width);
+        let x = right.x.saturating_sub(width.saturating_add(1)).max(area.x);
         Rect::new(x, area.y, width, 3u16.min(area.height))
     }
 
@@ -185,14 +194,15 @@ impl AppState {
         if self.view.layout == ViewLayout::Mobile {
             return self.view.mobile_menu_hit_area;
         }
+        self.header_button_left_of(self.sidebar_panel_toggle_rect(), 6)
+    }
 
-        let area = self.workspace_list_rect();
-        if area == Rect::default() {
-            return Rect::default();
-        }
-        let width = 8u16.min(area.width.max(1));
-        let x = area.x + area.width.saturating_sub(width);
-        Rect::new(x, area.y, width, 3u16.min(area.height))
+    pub(crate) fn sidebar_new_button_rect(&self) -> Rect {
+        self.header_button_left_of(self.global_launcher_rect(), 11)
+    }
+
+    pub(crate) fn sidebar_new_tab_button_rect(&self) -> Rect {
+        self.header_button_left_of(self.sidebar_new_button_rect(), 9)
     }
 
     pub(crate) fn global_menu_labels(&self) -> Vec<&'static str> {
@@ -331,6 +341,29 @@ impl AppState {
             (row >= tab_row.rect.y && row < tab_row.rect.y + tab_row.rect.height)
                 .then_some((tab_row.ws_idx, tab_row.tab_idx))
         })
+    }
+
+    /// Gap index for dropping a dragged tab back into its own space: above a
+    /// box's midline inserts before that tab, below it inserts after.
+    pub(super) fn sidebar_tab_insert_idx(&self, ws_idx: usize, row: u16) -> Option<usize> {
+        let boxes: Vec<&crate::app::state::SidebarTabRow> = self
+            .view
+            .sidebar_tab_rows
+            .iter()
+            .filter(|r| r.ws_idx == ws_idx)
+            .collect();
+        if boxes.is_empty() {
+            return None;
+        }
+        for tab_box in &boxes {
+            if row < tab_box.rect.y + tab_box.rect.height / 2 {
+                return Some(tab_box.tab_idx);
+            }
+            if row < tab_box.rect.y + tab_box.rect.height {
+                return Some(tab_box.tab_idx + 1);
+            }
+        }
+        Some(boxes.last()?.tab_idx + 1)
     }
 
     pub(super) fn collapsed_workspace_at_row(&self, row: u16) -> Option<usize> {
@@ -839,13 +872,13 @@ mod tests {
 
         app.handle_mouse(mouse(
             MouseEventKind::Down(MouseButton::Left),
-            2,
+            0,
             target_row,
         ));
         assert_eq!(app.state.active, Some(0));
         assert!(app.state.workspace_press.is_some());
 
-        app.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), 2, target_row));
+        app.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), 0, target_row));
         assert_eq!(app.state.active, Some(1));
         assert_eq!(app.state.selected, 1);
         assert!(app.state.workspace_press.is_none());
@@ -989,12 +1022,12 @@ mod tests {
 
         app.handle_mouse(mouse(
             MouseEventKind::Down(MouseButton::Left),
-            2,
+            0,
             source_row,
         ));
         app.handle_mouse(mouse(
             MouseEventKind::Drag(MouseButton::Left),
-            2,
+            0,
             target_row,
         ));
         assert!(matches!(
@@ -1004,7 +1037,7 @@ mod tests {
                 insert_idx: Some(0),
             })
         ));
-        app.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), 2, target_row));
+        app.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), 0, target_row));
 
         let names: Vec<_> = app
             .state
@@ -1037,8 +1070,8 @@ mod tests {
 
         let rows = app.state.view.sidebar_tab_rows.clone();
         assert_eq!(rows.len(), 2);
-        // a dotted rule sits between the two tab blocks
-        assert_eq!(rows[1].rect.y, rows[0].rect.y + rows[0].rect.height + 1);
+        // the tab boxes stack directly, borders touching
+        assert_eq!(rows[1].rect.y, rows[0].rect.y + rows[0].rect.height);
         assert_eq!(app.state.sidebar_tab_row_at(rows[1].rect.y), Some((0, 1)));
         assert_eq!(app.state.sidebar_tab_row_at(rows[0].rect.y), Some((0, 0)));
     }

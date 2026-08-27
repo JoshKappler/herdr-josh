@@ -27,6 +27,8 @@ use super::{
 
 pub(super) enum MouseAction {
     NewWorkspace,
+    NewTabInSelected,
+    ToggleRightPanel,
     Settings(SettingsAction),
     FocusWorkspace {
         ws_idx: usize,
@@ -542,13 +544,20 @@ impl AppState {
                         return None;
                     }
 
-                    let new_button = self.sidebar_new_button_rect();
-                    let on_new_button = mouse.row >= new_button.y
-                        && mouse.row < new_button.y + new_button.height
-                        && mouse.column >= new_button.x
-                        && mouse.column < new_button.x + new_button.width;
-                    if on_new_button {
+                    let hit = |rect: Rect| {
+                        mouse.row >= rect.y
+                            && mouse.row < rect.y + rect.height
+                            && mouse.column >= rect.x
+                            && mouse.column < rect.x + rect.width
+                    };
+                    if hit(self.sidebar_new_button_rect()) {
                         return Some(MouseAction::NewWorkspace);
+                    }
+                    if hit(self.sidebar_new_tab_button_rect()) {
+                        return Some(MouseAction::NewTabInSelected);
+                    }
+                    if hit(self.sidebar_panel_toggle_rect()) {
+                        return Some(MouseAction::ToggleRightPanel);
                     }
 
                     if let Some(target) =
@@ -590,15 +599,20 @@ impl AppState {
                         }
                     }
 
-                    if let Some((ws_idx, tab_idx)) = self.sidebar_tab_row_at(mouse.row) {
-                        self.sidebar_tab_press =
-                            Some(crate::app::state::SidebarTabPressState {
-                                ws_idx,
-                                tab_idx,
-                                start_col: mouse.column,
-                                start_row: mouse.row,
-                            });
-                        return None;
+                    // the rail column is the space's grab handle; everything
+                    // right of it belongs to the tab boxes
+                    let on_rail = mouse.column == self.workspace_list_rect().x;
+                    if !on_rail {
+                        if let Some((ws_idx, tab_idx)) = self.sidebar_tab_row_at(mouse.row) {
+                            self.sidebar_tab_press =
+                                Some(crate::app::state::SidebarTabPressState {
+                                    ws_idx,
+                                    tab_idx,
+                                    start_col: mouse.column,
+                                    start_row: mouse.row,
+                                });
+                            return None;
+                        }
                     }
 
                     if let Some(idx) = self.workspace_at_row(mouse.row) {
@@ -928,6 +942,26 @@ impl AppState {
                             source_tab_idx,
                             target_ws_idx,
                         });
+                    }
+                    Some(DragState {
+                        target:
+                            DragTarget::SidebarTabMove {
+                                source_ws_idx,
+                                source_tab_idx,
+                                target_ws_idx: Some(target_ws_idx),
+                            },
+                    }) if target_ws_idx == source_ws_idx => {
+                        // reorder within the space (Josh 2026-08-26)
+                        if let Some(insert_idx) =
+                            self.sidebar_tab_insert_idx(source_ws_idx, mouse.row)
+                        {
+                            self.mode = Mode::Terminal;
+                            return Some(MouseAction::MoveTab {
+                                ws_idx: source_ws_idx,
+                                source_tab_idx,
+                                insert_idx,
+                            });
+                        }
                     }
                     Some(DragState {
                         target:

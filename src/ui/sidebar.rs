@@ -193,21 +193,26 @@ pub(super) fn agent_panel_status_key(state: AgentState, seen: bool) -> &'static 
     }
 }
 
-/// One rendered line of a tab's dashboard block.
+/// One rendered line of a tab's dashboard block. `tint_at` is the byte
+/// offset where the trailing phase clause starts (tinted toward the dot).
 pub(crate) enum TabDashRow {
     Title {
         text: String,
-        state: AgentState,
-        seen: bool,
+        tint_at: Option<usize>,
         since_ms: Option<u64>,
     },
-    TitleCont(String),
+    TitleCont {
+        text: String,
+        tint_at: Option<usize>,
+    },
     Counts(String),
     Lane(String),
 }
 
 pub(crate) struct TabDash {
     pub tab_idx: usize,
+    pub state: AgentState,
+    pub seen: bool,
     pub rows: Vec<TabDashRow>,
 }
 
@@ -242,34 +247,123 @@ fn fmt_elapsed(since_ms: u64) -> String {
 
 /// Right-hand cells held clear of the title row for the elapsed time + dot.
 const TITLE_STATUS_RESERVE: u16 = 8;
+/// Rail + box borders + one cell of padding per side around tab text.
+const TAB_BOX_CHROME: u16 = 5;
+const TAB_TITLE_MAX_LINES: usize = 3;
 
-/// Split a tab line at a word boundary so long task prose wraps to a second
-/// row instead of eliding (Josh 2026-08-26).
-fn wrap_title(text: &str, width: u16) -> (String, Option<String>) {
-    let first = (width.saturating_sub(1 + TITLE_STATUS_RESERVE) as usize).max(8);
-    if display_width(text) <= first {
-        return (text.to_string(), None);
-    }
-    let mut break_at = None;
-    let mut last_fit = 0;
-    let mut used = 0usize;
-    for (i, ch) in text.char_indices() {
-        let w = display_width(ch.encode_utf8(&mut [0u8; 4]));
-        if used + w > first {
+/// A wrapped line and the byte offset of its first kept char in the source.
+struct WrappedLine {
+    text: String,
+    start: usize,
+}
+
+/// Word-wrap prose into up to `max_lines` lines; the last line elides.
+fn wrap_prose(text: &str, first: usize, rest: usize, max_lines: usize) -> Vec<WrappedLine> {
+    let mut lines = Vec::new();
+    let mut offset = 0usize;
+    while offset < text.len() && lines.len() < max_lines {
+        let avail = if lines.is_empty() { first } else { rest };
+        let remainder = &text[offset..];
+        if display_width(remainder) <= avail || lines.len() + 1 == max_lines {
+            lines.push(WrappedLine {
+                text: truncate_end(remainder, avail),
+                start: offset,
+            });
             break;
         }
-        used += w;
-        last_fit = i + ch.len_utf8();
-        if ch == ' ' {
-            break_at = Some(i);
+        let mut break_at = None;
+        let mut last_fit = 0;
+        let mut used = 0usize;
+        for (i, ch) in remainder.char_indices() {
+            let w = display_width(ch.encode_utf8(&mut [0u8; 4]));
+            if used + w > avail {
+                break;
+            }
+            used += w;
+            last_fit = i + ch.len_utf8();
+            if ch == ' ' {
+                break_at = Some(i);
+            }
         }
+        let head_end = break_at.unwrap_or(last_fit).max(1);
+        lines.push(WrappedLine {
+            text: remainder[..head_end].to_string(),
+            start: offset,
+        });
+        let skipped = remainder[head_end..].len() - remainder[head_end..].trim_start().len();
+        offset += head_end + skipped;
     }
-    let (head, tail) = match break_at {
-        Some(i) => (&text[..i], text[i..].trim_start()),
-        None => (&text[..last_fit], &text[last_fit..]),
-    };
-    let rest = (width as usize).saturating_sub(3).max(8);
-    (head.to_string(), Some(truncate_end(tail, rest)))
+    if lines.is_empty() {
+        lines.push(WrappedLine {
+            text: String::new(),
+            start: 0,
+        });
+    }
+    lines
+}
+
+/// Rail color: the space's color tag when set (the space-colors plugin
+/// stamps a `c` metadata token), plain text color otherwise.
+fn space_rail_color(
+    ws: &crate::workspace::Workspace,
+    p: &Palette,
+) -> ratatui::style::Color {
+    match ws.metadata_tokens.values().get("c").map(String::as_str) {
+        Some("🟥") => ratatui::style::Color::Rgb(0xc4, 0x4a, 0x58),
+        Some("🟦") => ratatui::style::Color::Rgb(0x4a, 0x74, 0xc4),
+        Some("🟩") => ratatui::style::Color::Rgb(0x4a, 0xa8, 0x66),
+        Some("🟪") => ratatui::style::Color::Rgb(0x8f, 0x66, 0xc4),
+        _ => p.text,
+    }
+}
+
+/// One prose row inside a tab box: optional bold leading "handle:", then the
+/// body, then the phase clause tinted toward the state dot's color.
+#[allow(clippy::too_many_arguments)]
+fn draw_tab_line(
+    buf: &mut ratatui::buffer::Buffer,
+    x: u16,
+    y: u16,
+    w: u16,
+    text: &str,
+    tint_at: Option<usize>,
+    bold_handle: bool,
+    base: Style,
+    tint: Style,
+) {
+    let split = tint_at.filter(|i| text.is_char_boundary(*i)).unwrap_or(text.len());
+    let (pre, tinted) = text.split_at(split);
+    let mut segs: Vec<(&str, Style)> = Vec::new();
+    match pre.split_once(": ") {
+        Some((head, rest)) if bold_handle && head.len() <= 28 => {
+            segs.push((head, base.add_modifier(Modifier::BOLD)));
+            segs.push((": ", base.add_modifier(Modifier::BOLD)));
+            segs.push((rest, base));
+        }
+        _ => segs.push((pre, base)),
+    }
+    if !tinted.is_empty() {
+        segs.push((tinted, tint));
+    }
+    let mut cx = x;
+    let end = x.saturating_add(w);
+    for (seg, style) in segs {
+        if cx >= end || seg.is_empty() {
+            break;
+        }
+        let shown = truncate_end(seg, (end - cx) as usize);
+        buf.set_string(cx, y, &shown, style);
+        cx += display_width(&shown) as u16;
+    }
+}
+
+fn line_tint_at(line: &WrappedLine, tint_start: Option<usize>) -> Option<usize> {
+    let ts = tint_start?;
+    let at = ts.saturating_sub(line.start).min(line.text.len());
+    if ts >= line.start + line.text.len() || !line.text.is_char_boundary(at) {
+        return None;
+    }
+    Some(at)
 }
 
 pub(crate) fn tab_dashboards(
@@ -301,15 +395,31 @@ pub(crate) fn tab_dashboards(
                     })
                 })
                 .unwrap_or_else(|| "shell".to_string());
-            let (title, cont) = wrap_title(&title, width);
-            let mut rows = vec![TabDashRow::Title {
-                text: title,
-                state,
-                seen,
-                since_ms,
-            }];
-            if let Some(cont) = cont {
-                rows.push(TabDashRow::TitleCont(cont));
+            let phase = toks.get("ph").map(String::as_str).unwrap_or("").trim().to_string();
+            let full = if phase.is_empty() {
+                title
+            } else {
+                format!("{title}, {phase}")
+            };
+            let tint_start = (!phase.is_empty()).then(|| full.len() - phase.len());
+            let inner = (width.saturating_sub(TAB_BOX_CHROME) as usize).max(8);
+            let first = inner.saturating_sub(TITLE_STATUS_RESERVE as usize).max(8);
+            let lines = wrap_prose(&full, first, inner, TAB_TITLE_MAX_LINES);
+            let mut rows = Vec::with_capacity(lines.len() + 1);
+            for (i, line) in lines.iter().enumerate() {
+                let tint_at = line_tint_at(line, tint_start);
+                if i == 0 {
+                    rows.push(TabDashRow::Title {
+                        text: line.text.clone(),
+                        tint_at,
+                        since_ms,
+                    });
+                } else {
+                    rows.push(TabDashRow::TitleCont {
+                        text: line.text.clone(),
+                        tint_at,
+                    });
+                }
             }
             if let Some(s) = toks.get("hdr").filter(|s| !s.is_empty()) {
                 rows.push(TabDashRow::Counts(s.clone()));
@@ -319,26 +429,25 @@ pub(crate) fn tab_dashboards(
                     rows.push(TabDashRow::Lane(s.clone()));
                 }
             }
-            TabDash { tab_idx, rows }
+            TabDash {
+                tab_idx,
+                state,
+                seen,
+                rows,
+            }
         })
         .collect()
 }
 
-/// Grouped worktree members and manually named spaces keep an identity row;
-/// an ordinary space is nothing but its tabs.
-fn workspace_has_manual_name(ws: &crate::workspace::Workspace) -> bool {
-    ws.custom_name.as_deref().is_some_and(|name| !name.is_empty())
-}
-
+/// Only grouped worktree members keep an identity row; spaces carry no
+/// titles at all (Josh 2026-08-26 redesign).
 fn workspace_name_row_visible(
     app: &AppState,
     ws_idx: usize,
-    ws: &crate::workspace::Workspace,
+    _ws: &crate::workspace::Workspace,
     indented: bool,
 ) -> bool {
-    workspace_has_manual_name(ws)
-        || indented
-        || workspace_parent_group_state(app, ws_idx).is_some()
+    indented || workspace_parent_group_state(app, ws_idx).is_some()
 }
 
 fn workspace_row_height(
@@ -349,13 +458,10 @@ fn workspace_row_height(
     width: u16,
 ) -> u16 {
     let dashes = tab_dashboards(app, ws, width);
-    let tab_rows: usize = dashes.iter().map(|d| d.rows.len()).sum();
-    let content = usize::from(workspace_name_row_visible(app, ws_idx, ws, indented))
-        + tab_rows
-        + dashes.len().saturating_sub(1);
-    // + a blank spacer under the bar above and the bar row itself, so text
-    // floats with even air on both sides of every separator (Josh 2026-08-26)
-    (content.max(1).min((u16::MAX - 2) as usize) as u16).saturating_add(2)
+    // each tab is its own bordered box: content rows plus two border rows
+    let boxed: usize = dashes.iter().map(|d| d.rows.len() + 2).sum();
+    let content = usize::from(workspace_name_row_visible(app, ws_idx, ws, indented)) + boxed;
+    content.max(3).min(u16::MAX as usize) as u16
 }
 
 fn workspace_row_height_in_body(
@@ -840,20 +946,14 @@ pub(crate) fn compute_workspace_list_areas(
                     rect: Rect::new(body.x, row_y, body.width, row_height),
                     indented: *indented,
                 });
-                let content_bottom = row_y
-                    .saturating_add(row_height.saturating_sub(1))
-                    .min(body_bottom);
-                let mut tab_y = row_y
-                    + 1
-                    + u16::from(workspace_name_row_visible(app, *ws_idx, ws, *indented));
-                for (i, dash) in tab_dashboards(app, ws, body.width).iter().enumerate() {
-                    if i > 0 {
-                        tab_y = tab_y.saturating_add(1);
-                    }
+                let content_bottom = row_y.saturating_add(row_height).min(body_bottom);
+                let mut tab_y =
+                    row_y + u16::from(workspace_name_row_visible(app, *ws_idx, ws, *indented));
+                for dash in tab_dashboards(app, ws, body.width).iter() {
                     if tab_y >= content_bottom {
                         break;
                     }
-                    let height = (dash.rows.len() as u16).min(content_bottom - tab_y);
+                    let height = (dash.rows.len() as u16 + 2).min(content_bottom - tab_y);
                     tab_rows.push(crate::app::state::SidebarTabRow {
                         ws_idx: *ws_idx,
                         tab_idx: dash.tab_idx,
@@ -1303,38 +1403,17 @@ fn render_workspace_list(
     };
 
     let list_bottom = area.y + area.height;
-    if area.height > 1 {
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![Span::styled(
-                " spaces",
-                Style::default().fg(p.text).add_modifier(Modifier::BOLD),
-            )])),
-            Rect::new(area.x, area.y + 1, area.width, 1),
-        );
-    }
     if area.height >= 3 {
-        render_header_button(
-            frame,
-            app.sidebar_new_button_rect(),
-            "new",
-            Style::default().fg(p.text).add_modifier(Modifier::BOLD),
-            p,
-        );
+        let plain = Style::default().fg(p.text).add_modifier(Modifier::BOLD);
+        render_header_button(frame, app.sidebar_new_tab_button_rect(), "new tab", plain, p);
+        render_header_button(frame, app.sidebar_new_button_rect(), "new space", plain, p);
         let menu_style = if app.global_menu_attention_badge_visible() {
             Style::default().fg(p.accent).add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(p.text).add_modifier(Modifier::BOLD)
+            plain
         };
         render_header_button(frame, app.global_launcher_rect(), "menu", menu_style, p);
-    }
-    if area.height >= WORKSPACE_SECTION_HEADER_ROWS {
-        // same bar as between spaces, so the top space is capped too
-        let divider_y = area.y + WORKSPACE_SECTION_HEADER_ROWS - 1;
-        let buf = frame.buffer_mut();
-        for x in area.x..area.x + area.width {
-            buf[(x, divider_y)].set_symbol("▂");
-            buf[(x, divider_y)].set_style(Style::default().fg(p.text));
-        }
+        render_header_button(frame, app.sidebar_panel_toggle_rect(), "◫", plain, p);
     }
 
     let metrics = workspace_list_scroll_metrics(app, area);
@@ -1346,7 +1425,7 @@ fn render_workspace_list(
         let ws = &app.workspaces[i];
         let row_y = card.rect.y;
         let row_height = card.rect.height;
-        let content_height = row_height.saturating_sub(1);
+        let content_height = row_height;
         let selected = i == app.selected && is_navigating;
         let is_active = Some(i) == app.active;
         let is_dragged = dragged_ws_idx == Some(i);
@@ -1396,7 +1475,7 @@ fn render_workspace_list(
             .flatten();
 
         let content_bottom = (row_y + content_height).min(list_bottom);
-        let mut y = row_y.saturating_add(1);
+        let mut y = row_y;
         if workspace_name_row_visible(app, i, ws, card.indented) && y < content_bottom {
             let mut spans = Vec::new();
             let prefix_width = if let Some((_, collapsed)) = parent_group.as_ref() {
@@ -1410,11 +1489,7 @@ fn render_workspace_list(
                 spans.push(Span::raw(" "));
                 1
             };
-            let style = if workspace_has_manual_name(ws) {
-                Style::default().fg(p.teal).add_modifier(Modifier::BOLD)
-            } else {
-                name_style
-            };
+            let style = name_style;
             spans.push(Span::styled(
                 truncate_end(
                     &display_label,
@@ -1437,151 +1512,113 @@ fn render_workspace_list(
         } else {
             tab_dashboards(app, ws, card.rect.width)
         };
-        'tabs: for (di, dash) in dashes.iter().enumerate() {
-            if di > 0 {
-                if y >= content_bottom {
-                    break;
-                }
-                let buf = frame.buffer_mut();
-                for x in card.rect.x..card.rect.x + card.rect.width {
-                    buf[(x, y)].set_symbol(if (x - card.rect.x) % 2 == 0 { "─" } else { " " });
-                    buf[(x, y)].set_style(
-                        Style::default().fg(p.overlay0).add_modifier(Modifier::DIM),
-                    );
-                }
-                y = y.saturating_add(1);
+        let rail = Style::default().fg(space_rail_color(ws, p));
+        let buf = frame.buffer_mut();
+        for dash in dashes.iter() {
+            if y >= content_bottom {
+                break;
+            }
+            let box_h = (dash.rows.len() as u16 + 2).min(content_bottom - y);
+            let bx = card.rect.x + 1;
+            let bw = card.rect.width.saturating_sub(1);
+            if bw < 5 || box_h < 2 {
+                break;
             }
             let tab_is_active = is_active && dash.tab_idx == ws.active_tab;
             if tab_is_active && !highlighted {
-                let block_bottom =
-                    (y + dash.rows.len() as u16).min(content_bottom);
-                let buf = frame.buffer_mut();
-                for by in y..block_bottom {
-                    for x in card.rect.x..card.rect.x + card.rect.width {
+                for by in y..y + box_h {
+                    for x in bx..bx + bw {
                         buf[(x, by)].set_style(Style::default().bg(p.surface_dim));
                     }
                 }
             }
+            let border = Style::default().fg(p.overlay0);
+            let top = y;
+            let bottom = y + box_h - 1;
+            for x in bx..bx + bw {
+                buf[(x, top)].set_symbol("─");
+                buf[(x, top)].set_style(border);
+                buf[(x, bottom)].set_symbol("─");
+                buf[(x, bottom)].set_style(border);
+            }
+            buf[(bx, top)].set_symbol("┌");
+            buf[(bx + bw - 1, top)].set_symbol("┐");
+            buf[(bx, bottom)].set_symbol("└");
+            buf[(bx + bw - 1, bottom)].set_symbol("┘");
+            for by in top + 1..bottom {
+                buf[(bx, by)].set_symbol("│");
+                buf[(bx, by)].set_style(border);
+                buf[(bx + bw - 1, by)].set_symbol("│");
+                buf[(bx + bw - 1, by)].set_style(border);
+            }
+            for by in y..y + box_h {
+                buf[(card.rect.x, by)].set_symbol("▌");
+                buf[(card.rect.x, by)].set_style(rail);
+            }
+
+            let dot = state_dot(dash.state, dash.seen, p);
+            let phase_style = dot.1.add_modifier(Modifier::DIM);
+            let base = Style::default().fg(p.text);
+            let inner_x = bx + 2;
+            let inner_w = bw.saturating_sub(4);
+            let mut ry = top + 1;
             for row in &dash.rows {
-                if y >= content_bottom {
-                    break 'tabs;
+                if ry >= bottom {
+                    break;
                 }
                 match row {
                     TabDashRow::Title {
                         text,
-                        state,
-                        seen,
+                        tint_at,
                         since_ms,
                     } => {
-                        let dot = state_dot(*state, *seen, p);
-                        let elapsed = matches!(state, AgentState::Working)
+                        let elapsed = matches!(dash.state, AgentState::Working)
                             .then_some(*since_ms)
                             .flatten()
                             .map(fmt_elapsed);
                         let status_width = 1
-                            + elapsed
-                                .as_ref()
-                                .map(|e| display_width(e) + 1)
-                                .unwrap_or(0);
-                        let title_style = Style::default().fg(p.text);
-                        let avail = card
-                            .rect
-                            .width
-                            .saturating_sub(status_width as u16 + 3)
-                            as usize;
-                        let shown = truncate_end(text, avail);
-                        let mut spans = vec![Span::raw(" ")];
-                        // "handle: prose" leads with a bold 2-4 word handle
-                        match shown.split_once(": ") {
-                            Some((head, rest)) if head.len() <= 28 => {
-                                spans.push(Span::styled(
-                                    format!("{head}:"),
-                                    title_style.add_modifier(Modifier::BOLD),
-                                ));
-                                spans.push(Span::styled(format!(" {rest}"), title_style));
-                            }
-                            _ => spans.push(Span::styled(shown, title_style)),
-                        }
-                        frame.render_widget(
-                            Paragraph::new(Line::from(spans)),
-                            Rect::new(card.rect.x, y, card.rect.width, 1),
+                            + elapsed.as_ref().map(|e| display_width(e) + 1).unwrap_or(0);
+                        let text_w =
+                            inner_w.saturating_sub(status_width as u16 + 1);
+                        draw_tab_line(
+                            buf, inner_x, ry, text_w, text, *tint_at, true, base,
+                            phase_style,
                         );
-                        let mut status_spans = Vec::new();
-                        if let Some(e) = elapsed {
-                            status_spans
-                                .push(Span::styled(e, Style::default().fg(p.subtext0)));
-                            status_spans.push(Span::raw(" "));
+                        let status_x = inner_x
+                            + inner_w.saturating_sub(status_width as u16);
+                        let mut sx = status_x;
+                        if let Some(e) = &elapsed {
+                            buf.set_string(sx, ry, e, Style::default().fg(p.subtext0));
+                            sx += display_width(e) as u16 + 1;
                         }
-                        status_spans.push(Span::styled(dot.0.to_string(), dot.1));
-                        let status_x = card
-                            .rect
-                            .x
-                            .saturating_add(card.rect.width.saturating_sub(status_width as u16 + 1));
-                        frame.render_widget(
-                            Paragraph::new(Line::from(status_spans)),
-                            Rect::new(status_x, y, status_width as u16, 1),
-                        );
+                        buf.set_string(sx, ry, dot.0, dot.1);
                     }
-                    TabDashRow::TitleCont(text) => {
-                        frame.render_widget(
-                            Paragraph::new(Line::from(vec![
-                                Span::raw(" "),
-                                Span::styled(
-                                    truncate_end(
-                                        text,
-                                        card.rect.width.saturating_sub(3) as usize,
-                                    ),
-                                    Style::default().fg(p.text),
-                                ),
-                            ])),
-                            Rect::new(card.rect.x, y, card.rect.width, 1),
+                    TabDashRow::TitleCont { text, tint_at } => {
+                        draw_tab_line(
+                            buf, inner_x, ry, inner_w, text, *tint_at, false, base,
+                            phase_style,
                         );
                     }
                     TabDashRow::Counts(text) => {
-                        frame.render_widget(
-                            Paragraph::new(Line::from(vec![
-                                Span::raw("  "),
-                                Span::styled(
-                                    truncate_end(
-                                        text,
-                                        card.rect.width.saturating_sub(3) as usize,
-                                    ),
-                                    Style::default()
-                                        .fg(p.overlay1)
-                                        .add_modifier(Modifier::DIM),
-                                ),
-                            ])),
-                            Rect::new(card.rect.x, y, card.rect.width, 1),
+                        buf.set_string(
+                            inner_x,
+                            ry,
+                            truncate_end(text, inner_w as usize),
+                            Style::default().fg(p.overlay1).add_modifier(Modifier::DIM),
                         );
                     }
                     TabDashRow::Lane(text) => {
-                        frame.render_widget(
-                            Paragraph::new(Line::from(vec![
-                                Span::raw("  "),
-                                Span::styled(
-                                    truncate_end(
-                                        text,
-                                        card.rect.width.saturating_sub(3) as usize,
-                                    ),
-                                    Style::default().fg(p.overlay0),
-                                ),
-                            ])),
-                            Rect::new(card.rect.x, y, card.rect.width, 1),
+                        buf.set_string(
+                            inner_x,
+                            ry,
+                            truncate_end(text, inner_w as usize),
+                            Style::default().fg(p.overlay0),
                         );
                     }
                 }
-                y = y.saturating_add(1);
+                ry += 1;
             }
-        }
-
-        // Rule between spaces (Josh 2026-08-26): about triple a hairline
-        let separator_y = row_y + content_height;
-        if separator_y < list_bottom {
-            let buf = frame.buffer_mut();
-            for x in card.rect.x..card.rect.x + card.rect.width {
-                buf[(x, separator_y)].set_symbol("▂");
-                buf[(x, separator_y)].set_style(Style::default().fg(p.text));
-            }
+            y = y.saturating_add(box_h);
         }
     }
 
@@ -1688,24 +1725,17 @@ mod tests {
             .unwrap();
         let buffer = terminal.backend().buffer();
 
-        // manual space names render teal with no backdrop of their own; the
-        // active TAB block carries the highlight (Josh 2026-08-26); each card
-        // opens with a blank spacer row under the bar above it
-        let first_row = first_row + 1;
-        let second_row = second_row + 1;
-        let active = buffer[(find_symbol_x(buffer, first_row, 25, "o"), first_row)].style();
-        assert_eq!(active.fg, Some(app.palette.teal));
-        assert!(active.add_modifier.contains(Modifier::BOLD));
-        assert_eq!(active.bg, Some(ratatui::style::Color::Reset));
-
-        let inactive = buffer[(find_symbol_x(buffer, second_row, 25, "t"), second_row)].style();
-        assert_eq!(inactive.fg, Some(app.palette.teal));
-        assert_eq!(inactive.bg, Some(ratatui::style::Color::Reset));
+        // spaces carry no titles; each tab is a bordered box behind a rail,
+        // and the active tab's whole box gets the backdrop (Josh 2026-08-26)
+        assert_eq!(buffer[(0, first_row)].symbol(), "▌");
+        assert_eq!(buffer[(1, first_row)].symbol(), "┌");
 
         let active_tab_row = first_row + 1;
         let tab = buffer[(find_symbol_x(buffer, active_tab_row, 25, "s"), active_tab_row)].style();
         assert_eq!(tab.fg, Some(app.palette.text));
         assert_eq!(tab.bg, Some(app.palette.surface_dim));
+        let active_border = buffer[(1, first_row)].style();
+        assert_eq!(active_border.bg, Some(app.palette.surface_dim));
 
         let idle_tab_row = second_row + 1;
         let idle = buffer[(find_symbol_x(buffer, idle_tab_row, 25, "s"), idle_tab_row)].style();
