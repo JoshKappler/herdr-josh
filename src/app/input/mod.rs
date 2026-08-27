@@ -343,7 +343,6 @@ impl App {
                         self.state.detail_panel_scroll = 0;
                         if !self.state.detail_panel_open {
                             self.state.detail_panel = None;
-                            self.state.detail_panel_selected = None;
                         }
                     }
                     MouseAction::Settings(action) => match action {

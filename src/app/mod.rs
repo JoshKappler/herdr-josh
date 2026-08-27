@@ -565,7 +565,6 @@ impl App {
             detail_panel_open: false,
             detail_panel_scroll: 0,
             detail_panel: None,
-            detail_panel_selected: None,
             tab_scroll: 0,
             tab_scroll_follow_active: true,
             mobile_switcher_scroll: 0,

@@ -6,7 +6,7 @@ use ratatui::{
 };
 
 mod detail_panel;
-pub(crate) use self::detail_panel::{detail_panel_item_at, detail_panel_max_scroll};
+pub(crate) use self::detail_panel::detail_panel_max_scroll;
 mod dialogs;
 mod keybind_help;
 mod menus;

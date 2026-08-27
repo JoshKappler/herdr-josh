@@ -524,20 +524,6 @@ impl AppState {
                 }
 
                 if self.over_detail_panel(mouse.column, mouse.row) {
-                    // click a timeline item to view its exchange; again to
-                    // return to the live conversation
-                    let hit = crate::ui::detail_panel_item_at(
-                        self,
-                        self.view.detail_panel_rect,
-                        mouse.row,
-                    );
-                    if let Some(uuid) = hit {
-                        if self.detail_panel_selected.as_deref() == Some(uuid.as_str()) {
-                            self.detail_panel_selected = None;
-                        } else {
-                            self.detail_panel_selected = Some(uuid);
-                        }
-                    }
                     return None;
                 }
 

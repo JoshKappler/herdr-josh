@@ -417,11 +417,16 @@ const AGENT_OSC_MAX_CHARS: usize = 256;
 ///   payload (e.g. `\x1b]0;\x07`) clears the stored value.
 /// - `latest_progress` — last OSC 9 payload (the part after `9;`), stored
 ///   as-is after sanitization. E.g. `"4;3;"` or `"4;0;"`.
+/// A spinner-frame title only proves work while it keeps animating: after
+/// this long without any title update it is a frozen leftover, not evidence.
+const SPINNER_TITLE_STALE_AFTER: std::time::Duration = std::time::Duration::from_secs(45);
+
 #[derive(Debug, Default)]
 pub(super) struct AgentOscStateTracker {
     state: Osc52ForwarderState,
     body: Vec<u8>,
     latest_title: Option<String>,
+    latest_title_at: Option<std::time::Instant>,
     terminal_title: Option<String>,
     latest_progress: Option<String>,
 }
@@ -483,6 +488,7 @@ impl AgentOscStateTracker {
                         (!title.is_empty()).then_some(title)
                     };
                     self.latest_title.clone_from(&title);
+                    self.latest_title_at = title.is_some().then(std::time::Instant::now);
                     self.terminal_title = title;
                 }
                 b"9" => {
@@ -504,11 +510,30 @@ impl AgentOscStateTracker {
         self.terminal_title = title;
     }
 
-    /// Returns the latest retained OSC title, or `""` if none has been seen or
-    /// the last title was an empty clear.
+    /// Returns the latest retained OSC title, or `""` if none has been seen,
+    /// the last title was an empty clear, or a spinner-frame title has sat
+    /// unrefreshed past the staleness window: a live agent keeps animating
+    /// it, so a frozen frame is a leftover that pinned Working (Josh 2026-08-27).
     #[allow(dead_code)] // used by terminal.rs; full call chain wired in Stage C
     pub(super) fn latest_title(&self) -> &str {
-        self.latest_title.as_deref().unwrap_or("")
+        let title = self.latest_title.as_deref().unwrap_or("");
+        let spinner = title
+            .chars()
+            .next()
+            .is_some_and(|c| ('\u{2800}'..='\u{28FF}').contains(&c));
+        if spinner
+            && self
+                .latest_title_at
+                .is_none_or(|at| at.elapsed() > SPINNER_TITLE_STALE_AFTER)
+        {
+            return "";
+        }
+        title
+    }
+
+    #[cfg(test)]
+    pub(super) fn backdate_latest_title(&mut self, age: std::time::Duration) {
+        self.latest_title_at = std::time::Instant::now().checked_sub(age);
     }
 
     /// Returns the latest retained OSC 9 progress payload, or `""` if none.
@@ -523,6 +548,7 @@ impl AgentOscStateTracker {
     /// and is attributed to the new agent.
     pub(super) fn clear_retained(&mut self) {
         self.latest_title = None;
+        self.latest_title_at = None;
         self.latest_progress = None;
     }
 }
@@ -1039,6 +1065,21 @@ mod tests {
         assert_eq!(t.latest_title(), "braille title");
         assert_eq!(t.terminal_title(), Some("braille title"));
         assert_eq!(t.latest_progress(), "");
+    }
+
+    #[test]
+    fn frozen_spinner_title_goes_stale_but_static_titles_do_not() {
+        let mut t = AgentOscStateTracker::default();
+        t.observe("\x1b]0;\u{280B} thinking\x07".as_bytes());
+        assert_eq!(t.latest_title(), "\u{280B} thinking");
+
+        t.backdate_latest_title(SPINNER_TITLE_STALE_AFTER + std::time::Duration::from_secs(5));
+        assert_eq!(t.latest_title(), "");
+
+        t.observe("\x1b]0;\u{2733} done with the task\x07".as_bytes());
+        assert_eq!(t.latest_title(), "\u{2733} done with the task");
+        t.backdate_latest_title(SPINNER_TITLE_STALE_AFTER + std::time::Duration::from_secs(5));
+        assert_eq!(t.latest_title(), "\u{2733} done with the task");
     }
 
     #[test]

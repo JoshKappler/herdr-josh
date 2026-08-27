@@ -1481,8 +1481,6 @@ pub struct AppState {
     pub detail_panel_open: bool,
     pub detail_panel_scroll: usize,
     pub detail_panel: Option<crate::app::detail_panel::DetailPanelCache>,
-    /// timeline item uuid whose exchange the panel shows; None = latest
-    pub detail_panel_selected: Option<String>,
     pub tab_scroll: usize,
     pub tab_scroll_follow_active: bool,
     pub mobile_switcher_scroll: usize,
@@ -1860,7 +1858,6 @@ impl AppState {
             detail_panel_open: false,
             detail_panel_scroll: 0,
             detail_panel: None,
-            detail_panel_selected: None,
             tab_scroll: 0,
             tab_scroll_follow_active: true,
             mobile_switcher_scroll: 0,

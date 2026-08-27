@@ -265,7 +265,7 @@ impl TerminalState {
         fallback_state: AgentState,
         visible_blocker: bool,
         _visible_idle: bool,
-        _visible_working: bool,
+        visible_working: bool,
         process_exited: bool,
         now: Instant,
     ) -> TerminalStateMutation {
@@ -288,9 +288,13 @@ impl TerminalState {
                 self.detected_agent = agent;
             }
             // A lost completion event otherwise pins Working forever: when the
-            // screen has read idle for a while and the hook has gone quiet,
-            // demote the stale authority in place (Josh 2026-08-26).
-            if fallback_state == AgentState::Idle
+            // screen shows no working evidence past the grace and the hook has
+            // gone quiet, demote the stale authority in place. Requiring a
+            // strict idle reading left unknown-classified idle screens yellow
+            // forever (Josh 2026-08-27).
+            if !matches!(fallback_state, AgentState::Working | AgentState::Blocked)
+                && !visible_working
+                && !visible_blocker
                 && !process_exited
                 && self.hook_authority.as_ref().is_some_and(|authority| {
                     authority.state == AgentState::Working
@@ -1685,6 +1689,73 @@ mod tests {
             .join(name)
             .display()
             .to_string()
+    }
+
+    #[test]
+    fn stale_working_authority_demotes_even_on_unknown_screen_reading() {
+        let mut terminal = test_terminal();
+        let now = Instant::now();
+        terminal.set_hook_authority_at(
+            "herdr:pi".into(),
+            "pi".into(),
+            AgentState::Working,
+            None,
+            None,
+            None,
+            now,
+        );
+        assert_eq!(terminal.state, AgentState::Working);
+
+        let inside_grace = now + Duration::from_secs(30);
+        terminal.set_detected_state_with_screen_signals_at(
+            Some(Agent::Pi),
+            AgentState::Unknown,
+            false,
+            false,
+            false,
+            false,
+            inside_grace,
+        );
+        assert_eq!(terminal.state, AgentState::Working);
+
+        let past_grace = now + STALE_WORKING_HOOK_GRACE + Duration::from_secs(5);
+        terminal.set_detected_state_with_screen_signals_at(
+            Some(Agent::Pi),
+            AgentState::Unknown,
+            false,
+            false,
+            false,
+            false,
+            past_grace,
+        );
+        assert_eq!(terminal.state, AgentState::Idle);
+    }
+
+    #[test]
+    fn working_screen_evidence_keeps_a_quiet_authority_working() {
+        let mut terminal = test_terminal();
+        let now = Instant::now();
+        terminal.set_hook_authority_at(
+            "herdr:pi".into(),
+            "pi".into(),
+            AgentState::Working,
+            None,
+            None,
+            None,
+            now,
+        );
+
+        let past_grace = now + STALE_WORKING_HOOK_GRACE + Duration::from_secs(5);
+        terminal.set_detected_state_with_screen_signals_at(
+            Some(Agent::Pi),
+            AgentState::Working,
+            false,
+            false,
+            true,
+            false,
+            past_grace,
+        );
+        assert_eq!(terminal.state, AgentState::Working);
     }
 
     #[test]
