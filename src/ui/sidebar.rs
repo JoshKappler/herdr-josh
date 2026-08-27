@@ -2338,6 +2338,19 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
     }
 
     #[test]
+    fn bottom_space_that_part_fits_still_fills_remaining_rows() {
+        let mut app = AppState::test_new();
+        app.workspaces = vec![Workspace::test_new("one"), Workspace::test_new("two")];
+        app.sidebar_spaces.row_gap = 1;
+
+        let (cards, tabs) = compute_workspace_list_areas(&app, Rect::new(0, 0, 30, 11));
+
+        assert_eq!(cards.len(), 2);
+        assert_eq!(cards[1].rect.height, 2);
+        assert_eq!(tabs.last().unwrap().rect.height, 2);
+    }
+
+    #[test]
     fn packed_workspace_drag_indicator_overlays_an_internal_boundary() {
         let mut app = AppState::test_new();
         app.workspaces = vec![
