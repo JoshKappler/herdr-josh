@@ -1004,10 +1004,12 @@ const COLLAPSED_BOX_ROWS: u16 = 3;
 
 pub(crate) fn collapsed_minimize_button_rect(area: Rect) -> Rect {
     let content_w = area.width.saturating_sub(1);
-    if content_w < 5 || area.height < 4 {
+    if content_w < 6 || area.height < 4 {
         return Rect::default();
     }
-    Rect::new(area.x, area.y + 1, 5, 3)
+    // one cell in from the left so it lines up with the dot boxes below,
+    // which sit just right of the space rail column
+    Rect::new(area.x + 1, area.y + 1, 5, 3)
 }
 
 /// Minimized sidebar geometry: one 3-row dot box per tab, boxes touching
@@ -1103,8 +1105,10 @@ pub(super) fn render_sidebar_collapsed(app: &AppState, frame: &mut Frame, area: 
             None
         };
         if let Some(bg) = box_bg {
-            for by in rect.y + 1..(rect.y + rect.height).saturating_sub(1) {
-                for x in bx + 1..bx + bw - 1 {
+            // border cells too: their glyphs are thin lines, so an interior-only
+            // fill leaves a dark margin inside the box (Josh 2026-08-27)
+            for by in rect.y..rect.y + rect.height {
+                for x in bx..bx + bw {
                     buf[(x, by)].set_style(Style::default().bg(bg));
                 }
             }
@@ -1569,7 +1573,9 @@ fn render_workspace_list(
                 break;
             }
             let tab_is_active = is_active && dash.tab_idx == ws.active_tab;
-            // highlights fill only the box interior, never the border cells
+            // fill the whole box, border cells included: the line glyphs are
+            // thin, so stopping at the interior leaves a dark margin inside
+            // the box (Josh 2026-08-27)
             let box_bg = if selected {
                 Some(p.surface0)
             } else if is_dragged || is_drop_target {
@@ -1580,8 +1586,8 @@ fn render_workspace_list(
                 None
             };
             if let Some(bg) = box_bg {
-                for by in y + 1..(y + box_h).saturating_sub(1) {
-                    for x in bx + 1..bx + bw - 1 {
+                for by in y..y + box_h {
+                    for x in bx..bx + bw {
                         buf[(x, by)].set_style(Style::default().bg(bg));
                     }
                 }
@@ -1773,7 +1779,8 @@ mod tests {
         let buffer = terminal.backend().buffer();
 
         // spaces carry no titles; each tab is a bordered box behind a rail,
-        // and the active tab's whole box gets the backdrop (Josh 2026-08-26)
+        // and the active tab's whole box, borders included, gets the
+        // backdrop (Josh 2026-08-27)
         assert_eq!(buffer[(0, first_row)].symbol(), "▌");
         assert_eq!(buffer[(1, first_row)].symbol(), "┌");
 
@@ -1782,7 +1789,7 @@ mod tests {
         assert_eq!(tab.fg, Some(app.palette.text));
         assert_eq!(tab.bg, Some(app.palette.surface_dim));
         let active_border = buffer[(1, first_row)].style();
-        assert_ne!(active_border.bg, Some(app.palette.surface_dim));
+        assert_eq!(active_border.bg, Some(app.palette.surface_dim));
 
         let idle_tab_row = second_row + 1;
         let idle = buffer[(find_symbol_x(buffer, idle_tab_row, 25, "s"), idle_tab_row)].style();
@@ -2087,7 +2094,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             .expect("collapsed sidebar should render");
 
         let buffer = terminal.backend().buffer();
-        assert_eq!(buffer[(2, 2)].symbol(), "◧");
+        assert_eq!(buffer[(3, 2)].symbol(), "◧");
         assert_eq!(buffer[(0, 5)].symbol(), "▌");
         assert_eq!(buffer[(1, 5)].symbol(), "┌");
         assert_eq!(buffer[(5, 7)].symbol(), "┘");
