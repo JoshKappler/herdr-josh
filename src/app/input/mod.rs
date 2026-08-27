@@ -339,17 +339,11 @@ impl App {
                         );
                     }
                     MouseAction::ToggleRightPanel => {
-                        // the right panel is a Hammerspoon webview; caps+W's
-                        // function toggles it
-                        let hs = ["/opt/homebrew/bin/hs", "hs"]
-                            .into_iter()
-                            .find(|p| std::path::Path::new(p).exists())
-                            .unwrap_or("hs");
-                        let _ = std::process::Command::new(hs)
-                            .args(["-c", "capsChordWorkers()"])
-                            .stdout(std::process::Stdio::null())
-                            .stderr(std::process::Stdio::null())
-                            .spawn();
+                        self.state.detail_panel_open = !self.state.detail_panel_open;
+                        self.state.detail_panel_scroll = 0;
+                        if !self.state.detail_panel_open {
+                            self.state.detail_panel = None;
+                        }
                     }
                     MouseAction::Settings(action) => match action {
                         SettingsAction::SaveTheme(name) => self.save_theme(&name),

@@ -5,6 +5,8 @@ use ratatui::{
     Frame,
 };
 
+mod detail_panel;
+pub(crate) use self::detail_panel::detail_panel_max_scroll;
 mod dialogs;
 mod keybind_help;
 mod menus;
@@ -102,6 +104,8 @@ use crate::app::{AppState, Mode};
 use crate::terminal::TerminalRuntimeRegistry;
 
 const COLLAPSED_WIDTH: u16 = 7; // rail + 5-wide dot box + separator
+const DETAIL_PANEL_WIDTH: u16 = 46;
+const MIN_TERMINAL_WIDTH_WITH_DETAIL: u16 = 60;
 
 // Braille spinner frames — smooth rotation
 const SPINNERS: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -233,8 +237,27 @@ fn compute_view_internal(
             .clamp(app.sidebar_min_width, app.sidebar_max_width)
     };
 
-    let [sidebar_area, main_area] =
-        Layout::horizontal([Constraint::Length(sidebar_w), Constraint::Min(1)]).areas(area);
+    // the detail panel only opens when the terminal keeps a workable width
+    let detail_w = if app.detail_panel_open
+        && area.width >= sidebar_w + DETAIL_PANEL_WIDTH + MIN_TERMINAL_WIDTH_WITH_DETAIL
+    {
+        DETAIL_PANEL_WIDTH
+    } else {
+        0
+    };
+    let [sidebar_area, main_area, detail_area] = Layout::horizontal([
+        Constraint::Length(sidebar_w),
+        Constraint::Min(1),
+        Constraint::Length(detail_w),
+    ])
+    .areas(area);
+
+    if detail_w > 0 {
+        app.refresh_detail_panel();
+        app.detail_panel_scroll = app
+            .detail_panel_scroll
+            .min(detail_panel::detail_panel_max_scroll(app, detail_area));
+    }
 
     let (tab_bar_rect, terminal_area) = app
         .active
@@ -314,6 +337,7 @@ fn compute_view_internal(
         tab_scroll_right_hit_area: tab_bar_view.scroll_right_hit_area,
         new_tab_hit_area: tab_bar_view.new_tab_hit_area,
         terminal_area,
+        detail_panel_rect: if detail_w > 0 { detail_area } else { Rect::default() },
         mobile_header_rect: Rect::default(),
         mobile_menu_hit_area: Rect::default(),
         toast_hit_area,
@@ -378,6 +402,7 @@ fn compute_mobile_view(
         tab_scroll_right_hit_area: Rect::default(),
         new_tab_hit_area: Rect::default(),
         terminal_area,
+        detail_panel_rect: Rect::default(),
         mobile_header_rect: header_rect,
         mobile_menu_hit_area: header_hits.menu,
         toast_hit_area,
@@ -414,6 +439,9 @@ pub fn render_with_runtime_registry(
     }
     if app.view.layout != ViewLayout::Mobile {
         render_tab_bar(app, frame, tab_bar_area);
+        if app.view.detail_panel_rect.width > 0 {
+            detail_panel::render_detail_panel(app, frame, app.view.detail_panel_rect);
+        }
     }
     if app
         .active

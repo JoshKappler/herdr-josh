@@ -1068,6 +1068,17 @@ impl AppState {
             }
 
             MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
+                if self.over_detail_panel(mouse.column, mouse.row) =>
+            {
+                if matches!(mouse.kind, MouseEventKind::ScrollUp) {
+                    self.detail_panel_scroll = self.detail_panel_scroll.saturating_sub(2);
+                } else {
+                    let max = crate::ui::detail_panel_max_scroll(self, self.view.detail_panel_rect);
+                    self.detail_panel_scroll = self.detail_panel_scroll.saturating_add(2).min(max);
+                }
+            }
+
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
                 if !in_sidebar && self.scroll_selection_with_wheel(terminal_runtimes, mouse) => {}
 
             MouseEventKind::ScrollUp | MouseEventKind::ScrollDown if !in_sidebar => {
@@ -1412,6 +1423,15 @@ impl AppState {
 
     pub(super) fn on_tab_bar(&self, col: u16, row: u16) -> bool {
         let area = self.view.tab_bar_rect;
+        area.width > 0
+            && row >= area.y
+            && row < area.y + area.height
+            && col >= area.x
+            && col < area.x + area.width
+    }
+
+    pub(super) fn over_detail_panel(&self, col: u16, row: u16) -> bool {
+        let area = self.view.detail_panel_rect;
         area.width > 0
             && row >= area.y
             && row < area.y + area.height
