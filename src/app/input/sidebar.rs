@@ -175,7 +175,9 @@ impl AppState {
     // 2026-08-26: big gaps read janky).
     fn sidebar_header_button_rect(&self, idx: usize) -> Rect {
         const BASE: [u16; 5] = [5, 11, 13, 8, 5];
-        const GROW_ORDER: [usize; 5] = [1, 2, 3, 0, 4];
+        // only the text buttons grow: the icon boxes stay odd-width so a
+        // single glyph centers cleanly
+        const GROW_ORDER: [usize; 3] = [2, 1, 3];
         let area = self.workspace_list_rect();
         if area == Rect::default() {
             return Rect::default();
@@ -184,7 +186,7 @@ impl AppState {
         let extra = area.width.saturating_sub(base_total);
         let mut widths = BASE;
         for (n, &i) in GROW_ORDER.iter().enumerate() {
-            widths[i] += extra / 5 + u16::from((n as u16) < extra % 5);
+            widths[i] += extra / 3 + u16::from((n as u16) < extra % 3);
         }
         let lead: u16 = widths[..idx].iter().sum();
         let x = (area.x + 1 + lead + idx as u16).min(area.x + area.width.saturating_sub(1));
