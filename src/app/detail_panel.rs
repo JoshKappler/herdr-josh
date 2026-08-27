@@ -7,15 +7,87 @@ use crate::app::state::AppState;
 const TAIL_BYTES: u64 = 512 * 1024;
 const REFRESH_INTERVAL: Duration = Duration::from_secs(2);
 
-/// Focused tab's transcript view for the right-side detail panel.
+/// Focused tab's timeline + conversation view for the right-side panel.
 pub struct DetailPanelCache {
     pub session_key: String,
     pub agent: String,
     pub transcript: Option<PathBuf>,
+    pub timeline: Option<Timeline>,
     pub prompt: String,
     pub reply: String,
+    /// item uuid the conversation view shows; "live" = latest exchange
+    pub exchange_key: String,
     checked_at: Instant,
     file_sig: (u64, u64),
+    timeline_sig: (u64, u64),
+}
+
+#[derive(serde::Deserialize, Clone, Default)]
+pub struct Timeline {
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub total_secs: f64,
+    #[serde(default)]
+    pub out_tokens: u64,
+    #[serde(default)]
+    pub done: Vec<TimelineItem>,
+    #[serde(default)]
+    pub current: Vec<TimelineItem>,
+    #[serde(default)]
+    pub next: Vec<String>,
+}
+
+#[derive(serde::Deserialize, Clone)]
+pub struct TimelineItem {
+    pub u: String,
+    #[serde(default)]
+    pub label: String,
+    #[serde(default)]
+    pub ts: f64,
+    #[serde(default)]
+    pub secs: Option<f64>,
+    #[serde(default)]
+    pub off: u64,
+}
+
+impl Timeline {
+    pub fn item(&self, uuid: &str) -> Option<&TimelineItem> {
+        self.done
+            .iter()
+            .chain(self.current.iter())
+            .find(|item| item.u == uuid)
+    }
+}
+
+#[cfg(test)]
+impl DetailPanelCache {
+    pub(crate) fn test_with_timeline(timeline: Timeline) -> Self {
+        Self {
+            session_key: "test".into(),
+            agent: "claude".into(),
+            transcript: Some(PathBuf::from("/dev/null")),
+            timeline: Some(timeline),
+            prompt: "prompt".into(),
+            reply: "reply".into(),
+            exchange_key: "live".into(),
+            checked_at: Instant::now(),
+            file_sig: (0, 0),
+            timeline_sig: (0, 0),
+        }
+    }
+}
+
+fn timeline_path(session_id: &str) -> Option<PathBuf> {
+    if session_id.contains('/') || session_id.contains("..") {
+        return None;
+    }
+    let home = std::env::var_os("HOME")?;
+    Some(
+        Path::new(&home)
+            .join(".local/state/herdr-detail")
+            .join(format!("{session_id}.json")),
+    )
 }
 
 impl AppState {
@@ -43,7 +115,11 @@ impl AppState {
         };
 
         if let Some(cache) = &self.detail_panel {
-            if cache.session_key == value && cache.checked_at.elapsed() < REFRESH_INTERVAL {
+            if cache.session_key != value {
+                self.detail_panel_selected = None;
+            } else if cache.checked_at.elapsed() < REFRESH_INTERVAL
+                && cache.exchange_key == self.desired_exchange_key(cache)
+            {
                 return;
             }
         }
@@ -54,27 +130,77 @@ impl AppState {
             AgentSessionRefKind::Id => None,
         };
 
+        let tl_path = timeline_path(&value);
+        let timeline_sig = tl_path.as_deref().map(file_signature).unwrap_or((0, 0));
+        let timeline = if self
+            .detail_panel
+            .as_ref()
+            .is_some_and(|c| c.session_key == value && c.timeline_sig == timeline_sig)
+        {
+            self.detail_panel.as_ref().and_then(|c| c.timeline.clone())
+        } else {
+            tl_path.as_deref().and_then(|path| {
+                let text = std::fs::read_to_string(path).ok()?;
+                serde_json::from_str::<Timeline>(&text).ok()
+            })
+        };
+
+        let selected = self
+            .detail_panel_selected
+            .clone()
+            .filter(|uuid| timeline.as_ref().is_some_and(|tl| tl.item(uuid).is_some()));
+        let exchange_key = selected.clone().unwrap_or_else(|| "live".to_string());
+
         let file_sig = transcript.as_deref().map(file_signature).unwrap_or((0, 0));
         if let Some(cache) = &mut self.detail_panel {
-            if cache.session_key == value && cache.file_sig == file_sig {
+            if cache.session_key == value
+                && cache.file_sig == file_sig
+                && cache.exchange_key == exchange_key
+            {
+                cache.timeline = timeline;
+                cache.timeline_sig = timeline_sig;
                 cache.checked_at = Instant::now();
                 return;
             }
         }
 
+        let offset = selected.as_deref().and_then(|uuid| {
+            timeline
+                .as_ref()
+                .and_then(|tl| tl.item(uuid))
+                .map(|item| item.off)
+        });
         let (prompt, reply) = transcript
             .as_deref()
-            .map(read_prompt_and_reply)
+            .map(|path| match offset {
+                Some(off) => read_exchange_at(path, off),
+                None => read_prompt_and_reply(path),
+            })
             .unwrap_or_default();
         self.detail_panel = Some(DetailPanelCache {
             session_key: value,
             agent,
             transcript,
+            timeline,
             prompt,
             reply,
+            exchange_key,
             checked_at: Instant::now(),
             file_sig,
+            timeline_sig,
         });
+    }
+
+    fn desired_exchange_key(&self, cache: &DetailPanelCache) -> String {
+        self.detail_panel_selected
+            .clone()
+            .filter(|uuid| {
+                cache
+                    .timeline
+                    .as_ref()
+                    .is_some_and(|tl| tl.item(uuid).is_some())
+            })
+            .unwrap_or_else(|| "live".to_string())
     }
 }
 
@@ -163,6 +289,55 @@ fn read_prompt_and_reply(path: &Path) -> (String, String) {
     (prompt, reply)
 }
 
+/// The exchange anchored at `off`: that prompt plus the reply that followed,
+/// up to the next real prompt.
+fn read_exchange_at(path: &Path, off: u64) -> (String, String) {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return Default::default();
+    };
+    if file.seek(SeekFrom::Start(off)).is_err() {
+        return Default::default();
+    }
+    let mut buf = Vec::new();
+    if file
+        .by_ref()
+        .take(TAIL_BYTES)
+        .read_to_end(&mut buf)
+        .is_err()
+    {
+        return Default::default();
+    }
+    let text = String::from_utf8_lossy(&buf);
+
+    let mut prompt = String::new();
+    let mut reply = String::new();
+    for line in text.lines() {
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        match value.get("type").and_then(|t| t.as_str()) {
+            Some("user") => {
+                if let Some(text) = user_prompt_text(&value) {
+                    if prompt.is_empty() {
+                        prompt = text;
+                    } else {
+                        break;
+                    }
+                }
+            }
+            Some("assistant") if !prompt.is_empty() => {
+                if let Some(text) = message_text(&value) {
+                    reply = text;
+                }
+            }
+            _ => {}
+        }
+    }
+    (prompt, reply)
+}
+
 fn user_prompt_text(value: &serde_json::Value) -> Option<String> {
     if value
         .get("isMeta")
@@ -172,8 +347,12 @@ fn user_prompt_text(value: &serde_json::Value) -> Option<String> {
         return None;
     }
     let text = message_text(value)?;
-    // skip system reminders, hook output and local-command echo wrappers
-    if text.starts_with('<') || text.starts_with("Caveat:") {
+    // skip system reminders, hook output and interruption markers
+    if text.starts_with('<')
+        || text.starts_with("Caveat:")
+        || text.starts_with("[SYSTEM")
+        || text.starts_with("[Request interrupted")
+    {
         return None;
     }
     Some(text)
