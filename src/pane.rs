@@ -246,6 +246,7 @@ async fn apply_agent_detection_publish_update(
 }
 
 const AGENT_MISS_CONFIRMATION_ATTEMPTS: u8 = 6;
+const AUTHORITY_HEARTBEAT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
 const PROCESS_RECHECK_IDENTIFIED: std::time::Duration = std::time::Duration::from_secs(5);
 const PROCESS_RECHECK_MISSING_FOREGROUND_GROUP: std::time::Duration =
     std::time::Duration::from_secs(30);
@@ -584,6 +585,7 @@ fn spawn_basic_detection_task(
         let mut last_visible_blocker = false;
         let mut last_visible_working = false;
         let mut last_visible_signal_refresh = None;
+        let mut last_authority_heartbeat = std::time::Instant::now();
         let mut last_process_check = std::time::Instant::now();
         let mut last_foreground_pgid = None;
         let mut has_process_probe = false;
@@ -753,6 +755,35 @@ fn spawn_basic_detection_task(
 
             if lifecycle_authority_active && !process_exited {
                 pending_idle.clear();
+                // A hook authority silences screen detection, so a lost
+                // completion event would pin Working forever. A slow
+                // heartbeat scan gives the app the idle reading it needs to
+                // demote a stale authority (Josh 2026-08-26).
+                if now.duration_since(last_authority_heartbeat) >= AUTHORITY_HEARTBEAT_INTERVAL {
+                    last_authority_heartbeat = now;
+                    let content = terminal.detection_text();
+                    let osc_title = terminal.agent_osc_title();
+                    let osc_progress = terminal.agent_osc_progress();
+                    if let Some(detection) = detection_update_for_publish_with_osc(
+                        agent,
+                        &content,
+                        &osc_title,
+                        &osc_progress,
+                        false,
+                    ) {
+                        publish_state_changed_event(
+                            state_events.clone(),
+                            pane_id,
+                            agent,
+                            detection.state,
+                            detection.visible_blocker,
+                            detection.visible_working,
+                            false,
+                            now,
+                        )
+                        .await;
+                    }
+                }
                 continue;
             }
 

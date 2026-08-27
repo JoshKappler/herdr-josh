@@ -1186,6 +1186,8 @@ pub(crate) enum DragTarget {
         source_ws_idx: usize,
         source_tab_idx: usize,
         target_ws_idx: Option<usize>,
+        // gap index inside the source space; None lands at a space's end
+        insert_idx: Option<usize>,
     },
 }
 

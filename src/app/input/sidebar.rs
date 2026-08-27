@@ -170,22 +170,25 @@ impl AppState {
     }
 
     // Header buttons, left to right: ◧ (minimize), new tab, new space, menu,
-    // ◨ (right panel). One blank row above, equal gaps between buttons, the
-    // leftover split into side buffers (Josh 2026-08-26).
+    // ◨ (right panel). One blank row above; gaps and side buffers pin at one
+    // cell and any leftover width widens the buttons instead (Josh
+    // 2026-08-26: big gaps read janky).
     fn sidebar_header_button_rect(&self, idx: usize) -> Rect {
-        const WIDTHS: [u16; 5] = [5, 11, 13, 8, 5];
+        const BASE: [u16; 5] = [5, 11, 13, 8, 5];
+        const GROW_ORDER: [usize; 5] = [1, 2, 3, 0, 4];
         let area = self.workspace_list_rect();
         if area == Rect::default() {
             return Rect::default();
         }
-        let total: u16 = WIDTHS.iter().sum();
-        let leftover = area.width.saturating_sub(total);
-        let gap = leftover / 6;
-        let side = gap + (leftover - gap * 6) / 2;
-        let lead: u16 = WIDTHS[..idx].iter().sum();
-        let x = (area.x + side + lead + gap * idx as u16)
-            .min(area.x + area.width.saturating_sub(1));
-        let width = WIDTHS[idx].min((area.x + area.width).saturating_sub(x));
+        let base_total: u16 = BASE.iter().sum::<u16>() + 6;
+        let extra = area.width.saturating_sub(base_total);
+        let mut widths = BASE;
+        for (n, &i) in GROW_ORDER.iter().enumerate() {
+            widths[i] += extra / 5 + u16::from((n as u16) < extra % 5);
+        }
+        let lead: u16 = widths[..idx].iter().sum();
+        let x = (area.x + 1 + lead + idx as u16).min(area.x + area.width.saturating_sub(1));
+        let width = widths[idx].min((area.x + area.width).saturating_sub(x));
         Rect::new(x, area.y + 1, width, 3u16.min(area.height.saturating_sub(1)))
     }
 
@@ -1127,6 +1130,7 @@ mod tests {
                 source_ws_idx: 0,
                 source_tab_idx: 1,
                 target_ws_idx: Some(1),
+                ..
             })
         ));
         app.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), 2, target_row));

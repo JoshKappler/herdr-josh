@@ -9,7 +9,7 @@ use ratatui::{
 };
 
 use self::tokens::{ResolvedToken, ResolvedTokenKind};
-use super::scrollbar::{render_scrollbar, should_show_scrollbar};
+use super::scrollbar::should_show_scrollbar;
 use super::status::{state_dot, state_label};
 use super::text::{display_width, display_width_u16, truncate_end};
 use crate::app::state::{AgentPanelSort, Palette};
@@ -1140,6 +1140,23 @@ pub(super) fn render_sidebar_collapsed(app: &AppState, frame: &mut Frame, area: 
     render_sidebar_toggle(app, frame, area, true, p);
 }
 
+/// The row a dragged tab would land on: a gap index points at that box's top
+/// border, anything else (cross-space or past the end) at the space's last
+/// box bottom border.
+pub(crate) fn sidebar_tab_drop_indicator_row(
+    rows: &[crate::app::state::SidebarTabRow],
+    target_ws: usize,
+    insert_idx: Option<usize>,
+) -> Option<u16> {
+    let boxes: Vec<&crate::app::state::SidebarTabRow> =
+        rows.iter().filter(|r| r.ws_idx == target_ws).collect();
+    let last = boxes.last()?;
+    Some(match insert_idx {
+        Some(gap) if gap < boxes.len() => boxes[gap].rect.y,
+        _ => last.rect.y + last.rect.height.saturating_sub(1),
+    })
+}
+
 pub(crate) fn workspace_drop_indicator_row(
     cards: &[crate::app::state::WorkspaceCardArea],
     area: Rect,
@@ -1435,6 +1452,11 @@ fn render_workspace_list(
             insert_idx: Some(insert_idx),
             ..
         }) => workspace_drop_indicator_row(&app.view.workspace_card_areas, area, *insert_idx),
+        Some(crate::app::state::DragTarget::SidebarTabMove {
+            target_ws_idx: Some(target),
+            insert_idx,
+            ..
+        }) => sidebar_tab_drop_indicator_row(&app.view.sidebar_tab_rows, *target, *insert_idx),
         _ => None,
     };
 

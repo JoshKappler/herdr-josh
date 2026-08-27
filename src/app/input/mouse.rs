@@ -731,6 +731,17 @@ impl AppState {
                 let workspace_drop_index = self.workspace_drop_index_at_row(mouse.row);
                 let tab_drop_index = self.tab_drop_index_at(mouse.column, mouse.row);
                 let sidebar_tab_move_target = self.workspace_at_row(mouse.row);
+                let sidebar_tab_move_source =
+                    match (&self.sidebar_tab_press, self.drag.as_ref().map(|d| &d.target)) {
+                        (Some(press), _) => Some(press.ws_idx),
+                        (_, Some(DragTarget::SidebarTabMove { source_ws_idx, .. })) => {
+                            Some(*source_ws_idx)
+                        }
+                        _ => None,
+                    };
+                let sidebar_tab_move_insert = sidebar_tab_move_source
+                    .filter(|source| sidebar_tab_move_target == Some(*source))
+                    .and_then(|source| self.sidebar_tab_insert_idx(source, mouse.row));
                 if self.drag.is_none() {
                     if let Some(press) = &self.workspace_press {
                         let delta_col = mouse.column.abs_diff(press.start_col);
@@ -768,6 +779,7 @@ impl AppState {
                                     source_ws_idx: press.ws_idx,
                                     source_tab_idx: press.tab_idx,
                                     target_ws_idx: sidebar_tab_move_target,
+                                    insert_idx: sidebar_tab_move_insert,
                                 },
                             });
                         }
@@ -790,10 +802,16 @@ impl AppState {
                         *insert_idx = tab_drop_index;
                     }
                 } else if let Some(DragState {
-                    target: DragTarget::SidebarTabMove { target_ws_idx, .. },
+                    target:
+                        DragTarget::SidebarTabMove {
+                            target_ws_idx,
+                            insert_idx,
+                            ..
+                        },
                 }) = &mut self.drag
                 {
                     *target_ws_idx = sidebar_tab_move_target;
+                    *insert_idx = sidebar_tab_move_insert;
                 } else if let Some(drag) = &self.drag {
                     match &drag.target {
                         DragTarget::WorkspaceReorder { .. }
@@ -939,6 +957,7 @@ impl AppState {
                                 source_ws_idx,
                                 source_tab_idx,
                                 target_ws_idx: Some(target_ws_idx),
+                                ..
                             },
                     }) if target_ws_idx != source_ws_idx => {
                         return Some(MouseAction::MoveTabToSpace {
@@ -953,6 +972,7 @@ impl AppState {
                                 source_ws_idx,
                                 source_tab_idx,
                                 target_ws_idx: Some(target_ws_idx),
+                                ..
                             },
                     }) if target_ws_idx == source_ws_idx => {
                         // reorder within the space (Josh 2026-08-26)
