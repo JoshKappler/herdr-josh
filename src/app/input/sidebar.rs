@@ -170,7 +170,8 @@ impl AppState {
     }
 
     // Header buttons, left to right: ◧ (minimize), new tab, new space, menu,
-    // ◫ (right panel), evenly justified across the column (Josh 2026-08-26).
+    // ◨ (right panel). One blank row above, equal gaps between buttons, the
+    // leftover split into side buffers (Josh 2026-08-26).
     fn sidebar_header_button_rect(&self, idx: usize) -> Rect {
         const WIDTHS: [u16; 5] = [5, 11, 13, 8, 5];
         let area = self.workspace_list_rect();
@@ -179,11 +180,13 @@ impl AppState {
         }
         let total: u16 = WIDTHS.iter().sum();
         let leftover = area.width.saturating_sub(total);
+        let gap = leftover / 6;
+        let side = gap + (leftover - gap * 6) / 2;
         let lead: u16 = WIDTHS[..idx].iter().sum();
-        let gap = (u32::from(leftover) * idx as u32 / (WIDTHS.len() as u32 - 1)) as u16;
-        let x = (area.x + lead + gap).min(area.x + area.width.saturating_sub(1));
+        let x = (area.x + side + lead + gap * idx as u16)
+            .min(area.x + area.width.saturating_sub(1));
         let width = WIDTHS[idx].min((area.x + area.width).saturating_sub(x));
-        Rect::new(x, area.y, width, 3u16.min(area.height))
+        Rect::new(x, area.y + 1, width, 3u16.min(area.height.saturating_sub(1)))
     }
 
     pub(crate) fn sidebar_minimize_button_rect(&self) -> Rect {
@@ -248,9 +251,6 @@ impl AppState {
     }
 
     pub(super) fn on_sidebar_divider(&self, col: u16, row: u16) -> bool {
-        if self.sidebar_collapsed {
-            return false;
-        }
         let sidebar = self.view.sidebar_rect;
         let toggle = crate::ui::expanded_sidebar_toggle_rect(sidebar);
         let on_toggle = toggle.width > 0
@@ -281,6 +281,13 @@ impl AppState {
     pub(super) fn set_manual_sidebar_width(&mut self, divider_col: u16) {
         let sidebar = self.view.sidebar_rect;
         let width = divider_col.saturating_sub(sidebar.x).saturating_add(1);
+        // dragging past the floor snaps into the minimized rail view, and
+        // dragging back out of it expands again (Josh 2026-08-26)
+        if width < self.sidebar_min_width {
+            self.sidebar_collapsed = true;
+            return;
+        }
+        self.sidebar_collapsed = false;
         self.sidebar_width = width.clamp(self.sidebar_min_width, self.sidebar_max_width);
         self.sidebar_width_source = crate::app::state::SidebarWidthSource::Manual;
         self.mark_session_dirty();
@@ -1461,14 +1468,16 @@ mod tests {
     }
 
     #[test]
-    fn dragging_below_min_clamps_to_configured_min() {
+    fn dragging_below_min_snaps_to_collapsed() {
         let mut app = app_for_mouse_test();
         app.state.sidebar_min_width = 22;
+        let starting_width = app.state.sidebar_width;
 
         app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 25, 5));
         app.handle_mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 5, 5));
 
-        assert_eq!(app.state.sidebar_width, 22);
+        assert!(app.state.sidebar_collapsed);
+        assert_eq!(app.state.sidebar_width, starting_width);
     }
 
     #[test]

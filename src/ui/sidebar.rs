@@ -17,7 +17,8 @@ use crate::app::{AppState, Mode};
 use crate::detect::AgentState;
 use crate::terminal::TerminalRuntimeRegistry;
 
-const WORKSPACE_SECTION_HEADER_ROWS: u16 = 4;
+// blank buffer row, three button rows, then the section separator line
+const WORKSPACE_SECTION_HEADER_ROWS: u16 = 5;
 const AGENT_PANEL_HEADER_ROWS: u16 = 3;
 
 pub(crate) struct AgentPanelEntry {
@@ -946,10 +947,17 @@ pub(crate) fn compute_workspace_list_areas(
                 let Some(ws) = app.workspaces.get(*ws_idx) else {
                     continue;
                 };
-                let row_height = workspace_row_height_in_body(app, *ws_idx, ws, *indented, body);
+                let mut row_height =
+                    workspace_row_height_in_body(app, *ws_idx, ws, *indented, body);
                 let gap = workspace_entry_gap(app, &entries, entry_idx, *indented);
-                if row_y.saturating_add(row_height) > body_bottom {
-                    break;
+                // a space that only part-fits still fills the remaining rows
+                // instead of leaving blank screen (Josh 2026-08-26)
+                let clipped = row_y.saturating_add(row_height) > body_bottom;
+                if clipped {
+                    row_height = body_bottom.saturating_sub(row_y);
+                    if row_height == 0 {
+                        break;
+                    }
                 }
                 cards.push(crate::app::state::WorkspaceCardArea {
                     ws_idx: *ws_idx,
@@ -970,6 +978,9 @@ pub(crate) fn compute_workspace_list_areas(
                         rect: Rect::new(body.x, tab_y, body.width, height),
                     });
                     tab_y = tab_y.saturating_add(height);
+                }
+                if clipped {
+                    break;
                 }
                 row_y = row_y
                     .saturating_add(row_height)
@@ -993,10 +1004,10 @@ const COLLAPSED_BOX_ROWS: u16 = 3;
 
 pub(crate) fn collapsed_minimize_button_rect(area: Rect) -> Rect {
     let content_w = area.width.saturating_sub(1);
-    if content_w < 5 || area.height < 3 {
+    if content_w < 5 || area.height < 4 {
         return Rect::default();
     }
-    Rect::new(area.x, area.y, 5, 3)
+    Rect::new(area.x, area.y + 1, 5, 3)
 }
 
 /// Minimized sidebar geometry: one 3-row dot box per tab, boxes touching
@@ -1056,6 +1067,15 @@ pub(super) fn render_sidebar_collapsed(app: &AppState, frame: &mut Frame, area: 
         let plain = Style::default().fg(p.text).add_modifier(Modifier::BOLD);
         render_header_button(frame, button, "◧", plain, p);
     }
+    let content_w = area.width.saturating_sub(1);
+    if area.height >= WORKSPACE_SECTION_HEADER_ROWS && content_w > 0 {
+        let sep_y = area.y + WORKSPACE_SECTION_HEADER_ROWS - 1;
+        let buf = frame.buffer_mut();
+        for x in area.x..area.x + content_w {
+            buf[(x, sep_y)].set_symbol("─");
+            buf[(x, sep_y)].set_style(Style::default().fg(p.text));
+        }
+    }
 
     for tab_box in collapsed_tab_boxes(app, area) {
         let Some(ws) = app.workspaces.get(tab_box.ws_idx) else {
@@ -1083,8 +1103,8 @@ pub(super) fn render_sidebar_collapsed(app: &AppState, frame: &mut Frame, area: 
             None
         };
         if let Some(bg) = box_bg {
-            for by in rect.y..rect.y + rect.height {
-                for x in bx..bx + bw {
+            for by in rect.y + 1..(rect.y + rect.height).saturating_sub(1) {
+                for x in bx + 1..bx + bw - 1 {
                     buf[(x, by)].set_style(Style::default().bg(bg));
                 }
             }
@@ -1375,12 +1395,10 @@ fn render_header_button(frame: &mut Frame, rect: Rect, label: &str, style: Style
     if rect.width < 3 || rect.height < 3 {
         return;
     }
+    let border = Style::default().fg(p.text);
     let horizontal = "─".repeat(rect.width.saturating_sub(2) as usize);
     frame.render_widget(
-        Paragraph::new(Span::styled(
-            format!("┌{horizontal}┐"),
-            Style::default().fg(p.text),
-        )),
+        Paragraph::new(Span::styled(format!("┌{horizontal}┐"), border)),
         Rect::new(rect.x, rect.y, rect.width, 1),
     );
     frame.render_widget(
@@ -1388,12 +1406,14 @@ fn render_header_button(frame: &mut Frame, rect: Rect, label: &str, style: Style
         Rect::new(rect.x + 1, rect.y + 1, rect.width - 2, 1),
     );
     frame.render_widget(
-        Paragraph::new(Span::styled(
-            format!("└{horizontal}┘"),
-            Style::default().fg(p.text),
-        )),
+        Paragraph::new(Span::styled(format!("└{horizontal}┘"), border)),
         Rect::new(rect.x, rect.y + 2, rect.width, 1),
     );
+    let buf = frame.buffer_mut();
+    for x in [rect.x, rect.x + rect.width - 1] {
+        buf[(x, rect.y + 1)].set_symbol("│");
+        buf[(x, rect.y + 1)].set_style(border);
+    }
 }
 
 fn render_workspace_list(
@@ -1419,7 +1439,7 @@ fn render_workspace_list(
     };
 
     let list_bottom = area.y + area.height;
-    if area.height >= 3 {
+    if area.height >= 4 {
         let plain = Style::default().fg(p.text).add_modifier(Modifier::BOLD);
         render_header_button(frame, app.sidebar_minimize_button_rect(), "◧", plain, p);
         render_header_button(frame, app.sidebar_new_tab_button_rect(), "new tab", plain, p);
@@ -1430,7 +1450,15 @@ fn render_workspace_list(
             plain
         };
         render_header_button(frame, app.global_launcher_rect(), "menu", menu_style, p);
-        render_header_button(frame, app.sidebar_panel_toggle_rect(), "◫", plain, p);
+        render_header_button(frame, app.sidebar_panel_toggle_rect(), "◨", plain, p);
+    }
+    if area.height >= WORKSPACE_SECTION_HEADER_ROWS {
+        let sep_y = area.y + WORKSPACE_SECTION_HEADER_ROWS - 1;
+        let buf = frame.buffer_mut();
+        for x in area.x..area.x + area.width {
+            buf[(x, sep_y)].set_symbol("─");
+            buf[(x, sep_y)].set_style(Style::default().fg(p.text));
+        }
     }
 
     let cards = &app.view.workspace_card_areas;
@@ -1519,7 +1547,7 @@ fn render_workspace_list(
                 break;
             }
             let tab_is_active = is_active && dash.tab_idx == ws.active_tab;
-            // highlights stay inside the box borders (Josh 2026-08-26)
+            // highlights fill only the box interior, never the border cells
             let box_bg = if selected {
                 Some(p.surface0)
             } else if is_dragged || is_drop_target {
@@ -1530,8 +1558,8 @@ fn render_workspace_list(
                 None
             };
             if let Some(bg) = box_bg {
-                for by in y..y + box_h {
-                    for x in bx..bx + bw {
+                for by in y + 1..(y + box_h).saturating_sub(1) {
+                    for x in bx + 1..bx + bw - 1 {
                         buf[(x, by)].set_style(Style::default().bg(bg));
                     }
                 }
@@ -1732,7 +1760,7 @@ mod tests {
         assert_eq!(tab.fg, Some(app.palette.text));
         assert_eq!(tab.bg, Some(app.palette.surface_dim));
         let active_border = buffer[(1, first_row)].style();
-        assert_eq!(active_border.bg, Some(app.palette.surface_dim));
+        assert_ne!(active_border.bg, Some(app.palette.surface_dim));
 
         let idle_tab_row = second_row + 1;
         let idle = buffer[(find_symbol_x(buffer, idle_tab_row, 25, "s"), idle_tab_row)].style();
@@ -2027,8 +2055,8 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
         let area = Rect::new(0, 0, 7, 20);
         let boxes = collapsed_tab_boxes(&app, area);
         assert_eq!(boxes.len(), 2);
-        assert_eq!(boxes[0].rect, Rect::new(0, 4, 6, 3));
-        assert_eq!(boxes[1].rect.y, 8);
+        assert_eq!(boxes[0].rect, Rect::new(0, 5, 6, 3));
+        assert_eq!(boxes[1].rect.y, 9);
 
         let mut terminal = Terminal::new(TestBackend::new(area.width, area.height))
             .expect("test terminal should initialize");
@@ -2037,11 +2065,11 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             .expect("collapsed sidebar should render");
 
         let buffer = terminal.backend().buffer();
-        assert_eq!(buffer[(2, 1)].symbol(), "◧");
-        assert_eq!(buffer[(0, 4)].symbol(), "▌");
-        assert_eq!(buffer[(1, 4)].symbol(), "┌");
-        assert_eq!(buffer[(5, 6)].symbol(), "┘");
-        assert_eq!(buffer[(3, 5)].symbol(), "●");
+        assert_eq!(buffer[(2, 2)].symbol(), "◧");
+        assert_eq!(buffer[(0, 5)].symbol(), "▌");
+        assert_eq!(buffer[(1, 5)].symbol(), "┌");
+        assert_eq!(buffer[(5, 7)].symbol(), "┘");
+        assert_eq!(buffer[(3, 6)].symbol(), "●");
     }
 
     #[test]
@@ -2305,7 +2333,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             .windows(2)
             .all(|pair| pair[1].rect.y == pair[0].rect.y + pair[0].rect.height));
         let packed_metrics = workspace_list_scroll_metrics(&app, Rect::new(0, 0, 30, 16));
-        assert_eq!(packed_metrics.viewport_rows, 3);
+        assert_eq!(packed_metrics.viewport_rows, 2);
         assert_eq!(packed_metrics.max_offset_from_bottom, 1);
     }
 

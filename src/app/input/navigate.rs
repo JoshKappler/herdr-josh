@@ -503,6 +503,8 @@ impl App {
             return;
         };
         let label = tab.custom_name.clone();
+        // the move rebuilds the tab, so its summary tokens must ride along
+        let carried_tokens = tab.metadata_tokens.values();
         let pane_ids: Vec<String> = tab
             .layout
             .pane_ids()
@@ -544,6 +546,23 @@ impl App {
                     return;
                 }
             }
+        }
+        if let Some(tab_id) = moved_tab_id.filter(|_| !carried_tokens.is_empty()) {
+            self.dispatch_runtime_mutation(
+                "tui.sidebar.tab.move.metadata",
+                crate::api::schema::Method::TabReportMetadata(
+                    crate::api::schema::TabReportMetadataParams {
+                        tab_id,
+                        source: "local-agent".to_string(),
+                        tokens: carried_tokens
+                            .into_iter()
+                            .map(|(key, value)| (key, Some(value)))
+                            .collect(),
+                        seq: None,
+                        ttl_ms: Some(7_200_000),
+                    },
+                ),
+            );
         }
     }
 
